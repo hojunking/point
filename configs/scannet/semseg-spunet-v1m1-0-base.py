@@ -2,9 +2,11 @@ _base_ = ["../_base_/default_runtime.py"]
 
 # misc custom setting
 batch_size = 12  # bs: total bs in all gpus
+num_worker = 16
 mix_prob = 0.8
 empty_cache = False
 enable_amp = True
+seed = 43244662
 
 # model settings
 model = dict(
