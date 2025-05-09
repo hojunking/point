@@ -14,7 +14,7 @@ RESUME=false
 NUM_GPU=None
 NUM_MACHINE=1
 DIST_URL="auto"
-
+WANDB_MODE=disabled
 
 while getopts "p:d:c:n:w:g:m:r:" opt; do
   case $opt in
@@ -93,7 +93,7 @@ echo "Running code in: $CODE_DIR"
 
 
 echo " =========> RUN TASK <========="
-ulimit -n 65536
+
 if [ "${WEIGHT}" = "None" ]
 then
     $PYTHON "$CODE_DIR"/tools/$TRAIN_CODE \
@@ -102,7 +102,10 @@ then
     --num-machines "$NUM_MACHINE" \
     --machine-rank ${SLURM_NODEID:-0} \
     --dist-url ${DIST_URL} \
-    --options save_path="$EXP_DIR"
+    --options save_path="$EXP_DIR" \
+      data.train.data_root="$DATA_ROOT" \
+     #data.val.data_root="$DATA_ROOT" \
+     #data.test.data_root="$DATA_ROOT" 
 else
     $PYTHON "$CODE_DIR"/tools/$TRAIN_CODE \
     --config-file "$CONFIG_DIR" \
@@ -110,5 +113,8 @@ else
     --num-machines "$NUM_MACHINE" \
     --machine-rank ${SLURM_NODEID:-0} \
     --dist-url ${DIST_URL} \
-    --options save_path="$EXP_DIR" resume="$RESUME" weight="$WEIGHT"
+    --options save_path="$EXP_DIR" resume="$RESUME" weight="$WEIGHT" \
+      data.train.data_root="$DATA_ROOT" \
+     #data.val.data_root="$DATA_ROOT" \
+     #data.test.data_root="$DATA_ROOT" 
 fi

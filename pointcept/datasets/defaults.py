@@ -32,6 +32,7 @@ class DefaultDataset(Dataset):
         "segment",
         "instance",
         "pose",
+        "features",
     ]
 
     def __init__(
@@ -74,6 +75,10 @@ class DefaultDataset(Dataset):
         )
 
     def get_data_list(self):
+        print("[DEBUG] data_root:", self.data_root)
+        print("[DEBUG] split:", self.split)
+        print("[DEBUG] os.path.isfile:", os.path.isfile(os.path.join(self.data_root, self.split)))
+        
         if isinstance(self.split, str):
             split_list = [self.split]
         elif isinstance(self.split, Sequence):
@@ -126,7 +131,8 @@ class DefaultDataset(Dataset):
             data_dict["segment"] = (
                 np.ones(data_dict["coord"].shape[0], dtype=np.int32) * -1
             )
-
+        if "features" in data_dict.keys():
+            data_dict["features"] = data_dict["features"].astype(np.float32)
         if "instance" in data_dict.keys():
             data_dict["instance"] = data_dict["instance"].reshape([-1]).astype(np.int32)
         else:
@@ -207,6 +213,9 @@ class ConcatDataset(Dataset):
         )
 
     def get_data_list(self):
+        print("[DEBUG] data_root:", self.data_root)
+        print("[DEBUG] split:", self.split)
+        print("[DEBUG] os.path.isfile:", os.path.isfile(os.path.join(self.data_root, self.split)))
         data_list = []
         for i in range(len(self.datasets)):
             data_list.extend(
