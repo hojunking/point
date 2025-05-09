@@ -6,6 +6,7 @@ num_worker = 16
 mix_prob = 0.8
 empty_cache = False
 enable_amp = True
+enable_wandb = False
 seed = 43244662
 
 # model settings

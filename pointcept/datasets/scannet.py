@@ -32,6 +32,7 @@ class ScanNetDataset(DefaultDataset):
         "normal",
         "segment20",
         "instance",
+        "features",
     ]
     class2id = np.array(VALID_CLASS_IDS_20)
 
@@ -50,7 +51,8 @@ class ScanNetDataset(DefaultDataset):
             data_list = super().get_data_list()
         else:
             data_list = [
-                os.path.join(self.data_root, "train", name) for name in self.lr
+            #    os.path.join(self.data_root, "train", name) for name in self.lr
+            os.path.join(self.data_root, self.split, name) for name in self.lr
             ]
         return data_list
 
@@ -88,7 +90,9 @@ class ScanNetDataset(DefaultDataset):
             data_dict["segment"] = (
                 np.ones(data_dict["coord"].shape[0], dtype=np.int32) * -1
             )
-
+        if "features" in data_dict.keys():
+            data_dict["features"] = data_dict["features"].astype(np.float32)
+            
         if "instance" in data_dict.keys():
             data_dict["instance"] = (
                 data_dict.pop("instance").reshape([-1]).astype(np.int32)
