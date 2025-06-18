@@ -33,6 +33,7 @@ class ScanNetDataset(DefaultDataset):
         "segment20",
         "instance",
         "features",
+        "boundary"
     ]
     class2id = np.array(VALID_CLASS_IDS_20)
 
@@ -90,8 +91,6 @@ class ScanNetDataset(DefaultDataset):
             data_dict["segment"] = (
                 np.ones(data_dict["coord"].shape[0], dtype=np.int32) * -1
             )
-        if "features" in data_dict.keys():
-            data_dict["features"] = data_dict["features"].astype(np.float32)
             
         if "instance" in data_dict.keys():
             data_dict["instance"] = (
@@ -101,6 +100,12 @@ class ScanNetDataset(DefaultDataset):
             data_dict["instance"] = (
                 np.ones(data_dict["coord"].shape[0], dtype=np.int32) * -1
             )
+        if "features" in data_dict.keys():
+            data_dict["features"] = data_dict["features"].astype(np.float32)
+        
+        if "boundary" in data_dict.keys(): 
+            data_dict["boundary"] = data_dict["boundary"].reshape([-1]).astype(np.int32)
+
         if self.la:
             sampled_index = self.la[self.get_data_name(idx)]
             mask = np.ones_like(data_dict["segment"], dtype=bool)

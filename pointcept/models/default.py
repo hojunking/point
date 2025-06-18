@@ -226,3 +226,84 @@ class DefaultClassifier(nn.Module):
             return dict(loss=loss, cls_logits=cls_logits)
         else:
             return dict(cls_logits=cls_logits)
+
+@MODELS.register_module()
+class SegmentorBS(nn.Module): # DefaultSegmentorV2를 대체할 새로운 클래스
+    def __init__(
+        self,
+        num_classes,
+        backbone_out_channels, # BFABlock의 semantic_out_channels와 일치해야 함.
+        backbone=None,
+        criteria=None, # 이제 BoundarySemanticLoss의 Config를 받게 됨.
+        freeze_backbone=False,
+    ):
+        super().__init__()
+        self.seg_head = (
+            nn.Linear(backbone_out_channels, num_classes)
+            if num_classes > 0
+            else nn.Identity()
+        )
+        self.backbone = build_model(backbone) # PT-v3m3-BSBlock 모델이 여기에 빌드됨.
+        self.criteria = build_criteria(criteria) # BoundarySemanticLoss 인스턴스가 빌드됨.
+        self.freeze_backbone = freeze_backbone
+        if self.freeze_backbone:
+            for p in self.backbone.parameters():
+                p.requires_grad = False
+
+    def forward(self, input_dict, return_point=False):
+        point = Point(input_dict)
+        point = self.backbone(point) # PT-v3m3-BSBlock의 forward 호출
+                                    # point.feat는 강화된 semantic feature (N, backbone_out_channels)
+                                    # point.boundary_logits는 boundary prediction logits (N, 1)
+        # 기존 DefaultSegmentorV2의 Point 객체에서 feat 추출 로직 (pooling_parent 처리 등)
+        # 이 로직은 PointTransformerV3m3BSBlock이 SerializedUnpooling을 통해 이미
+        # 원래 해상도로 Feature를 복구했으므로, 이 루프는 건너뛸 가능성이 높지만
+        # 기존 DefaultSegmentorV2의 코드를 유지하기 위해 포함합니다.
+        if isinstance(point, Point):
+            while "pooling_parent" in point.keys():
+                assert "pooling_inverse" in point.keys()
+                parent = point.pop("pooling_parent")
+                inverse = point.pop("pooling_inverse")
+                parent.feat = torch.cat([parent.feat, point.feat[inverse]], dim=-1)
+                point = parent
+            feat = point.feat # 최종 semantic feature (seg_head의 입력)
+        else:
+            feat = point # should not happen if backbone returns Point
+        
+        seg_logits = self.seg_head(feat) # 최종 semantic prediction logits (N, num_classes)
+
+        return_dict = dict()
+        if return_point:
+            return_dict["point"] = point # point 객체 (boundary_pred_logits 포함) 반환
+
+        # 모델이 학습 모드일 때 (Loss 계산 필수)
+        if self.training:
+            # criteria (BoundarySemanticLoss) 호출
+            # semantic_logits과 GT semantic label은 항상 전달
+            # boundary_logits과 GT boundary label은 있을 경우에만 전달 (BoundarySemanticLoss 내부에서 조건 처리)
+            loss = self.criteria(
+                seg_logits=seg_logits,
+                gt_semantic_label=input_dict["segment"],
+                boundary_logits=point.boundary_logits, # 새 변수명 사용
+                gt_boundary_label=input_dict["boundary"] # 새 변수명 사용
+            )
+            return_dict['loss'] = loss # Loss 반환
+
+        # 모델이 평가 또는 테스트 모드일 때
+        else: # not self.training
+            # 평가 모드 (GT semantic label이 input_dict에 있는 경우)
+            if "segment" in input_dict.keys():
+                # Loss 계산 (훈련과 동일한 방식, 단 gradient 계산은 없음)
+                loss = self.criteria(
+                    seg_logits=seg_logits,
+                    gt_semantic_label=input_dict["segment"],
+                    boundary_logits=point.boundary_logits,
+                    gt_boundary_label=input_dict["boundary"]
+                )
+                return_dict['loss'] = loss # Loss 반환
+
+            # 예측 결과는 항상 반환 (평가 및 테스트 모드)
+            return_dict["seg_logits"] = seg_logits
+            return_dict["boundary_logits"] = point.boundary_logits
+
+        return return_dict

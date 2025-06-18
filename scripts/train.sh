@@ -104,8 +104,8 @@ then
     --dist-url ${DIST_URL} \
     --options save_path="$EXP_DIR" \
       data.train.data_root="$DATA_ROOT" \
-     #data.val.data_root="$DATA_ROOT" \
-     #data.test.data_root="$DATA_ROOT" 
+     data.val.data_root="$DATA_ROOT" \
+     data.test.data_root="$DATA_ROOT" 
 else
     $PYTHON "$CODE_DIR"/tools/$TRAIN_CODE \
     --config-file "$CONFIG_DIR" \
@@ -115,6 +115,6 @@ else
     --dist-url ${DIST_URL} \
     --options save_path="$EXP_DIR" resume="$RESUME" weight="$WEIGHT" \
       data.train.data_root="$DATA_ROOT" \
-     #data.val.data_root="$DATA_ROOT" \
-     #data.test.data_root="$DATA_ROOT" 
+     data.val.data_root="$DATA_ROOT" \
+     data.test.data_root="$DATA_ROOT" 
 fi

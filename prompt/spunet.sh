@@ -1,15 +1,14 @@
 #!/bin/bash
 
 DATA_ROOTS=(
-   #"data/3dgs_pdistance0005_pruned"
-  "data/vox004_scale04-low_opacity"
-   #"data/scale075"
-   #"data/3dgs_pdistance00008_pruned"
+  "data/vox004_rotation04_opacity"
+  "data/vox004_scale06_opacity"
+  "data/vox004_opacity"
 )
 
 for ROOT in "${DATA_ROOTS[@]}"
 do
-  EXP_NAME="scannet-samples-spunet-b-$(basename "$ROOT")"
+  EXP_NAME="scannet-spunet-b-$(basename "$ROOT")"
   echo "Launching training for data_root: $ROOT"
 
   DATA_ROOT="$ROOT" \

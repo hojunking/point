@@ -99,7 +99,7 @@ data = dict(
         type=dataset_type,
         split="train",
         data_root=data_root,
-        lr_file="data/scannet/train100_samples.txt",
+        #lr_file="data/scannet/train100_samples.txt",
         transform=[
             dict(type="CenterShift", apply_z=True),
             dict(
@@ -133,7 +133,7 @@ data = dict(
             dict(type="ToTensor"),
             dict(
                 type="Collect",
-                keys=("coord", "grid_coord", "segment"),
+                keys=("coord", "grid_coord", "segment", "boundary"),  # <--- 변경: 'boundary' 키 추가
                 feat_keys=("color", "normal"),
                 #feat_keys=("color", "normal", "features"),
 
@@ -145,7 +145,7 @@ data = dict(
         type=dataset_type,
         split="val",
         data_root=data_root,
-        lr_file="data/scannet/valid20_samples.txt",
+        #lr_file="data/scannet/valid20_samples.txt",
         transform=[
             dict(type="CenterShift", apply_z=True),
             dict(
@@ -160,7 +160,7 @@ data = dict(
             dict(type="ToTensor"),
             dict(
                 type="Collect",
-                keys=("coord", "grid_coord", "segment"),
+                keys=("coord", "grid_coord", "segment", "boundary"), 
                 feat_keys=("color", "normal"),
                 #feat_keys=("color", "normal", "features"),
             ),
@@ -171,7 +171,7 @@ data = dict(
         type=dataset_type,
         split="val",
         data_root=data_root,
-        lr_file="data/scannet/valid20_samples.txt",
+        #lr_file="data/scannet/valid20_samples.txt",
 
         transform=[
             dict(type="CenterShift", apply_z=True),

@@ -33,6 +33,7 @@ def index_operator(data_dict, index, duplicate=False):
             "segment",
             "instance",
             "features",
+            "boundary"
         ]
     if not duplicate:
         for key in data_dict["index_valid_keys"]:
@@ -820,6 +821,9 @@ class GridSample(object):
     def __call__(self, data_dict):
         assert "coord" in data_dict.keys()
         scaled_coord = data_dict["coord"] / np.array(self.grid_size)
+
+        # fixed normal for octformer
+        displacement_normal = data_dict["normal"] if "normal" in data_dict else None
         grid_coord = np.floor(scaled_coord).astype(int)
         min_coord = grid_coord.min(0)
         grid_coord -= min_coord
@@ -857,8 +861,9 @@ class GridSample(object):
                     scaled_coord - grid_coord - 0.5
                 )  # [0, 1] -> [-0.5, 0.5] displacement to center
                 if self.project_displacement:
+                    # fixed normal for octformer
                     displacement = np.sum(
-                        displacement * data_dict["normal"], axis=-1, keepdims=True
+                        displacement * displacement_normal, axis=-1, keepdims=True
                     )
                 data_dict["displacement"] = displacement[idx_unique]
                 data_dict["index_valid_keys"].append("displacement")
@@ -884,9 +889,13 @@ class GridSample(object):
                         scaled_coord - grid_coord - 0.5
                     )  # [0, 1] -> [-0.5, 0.5] displacement to center
                     if self.project_displacement:
+                        # fixed normal for octformer
                         displacement = np.sum(
-                            displacement * data_dict["normal"], axis=-1, keepdims=True
+                            displacement * displacement_normal, axis=-1, keepdims=True
                         )
+                        # displacement = np.sum(
+                        #     displacement * data_dict["normal"], axis=-1, keepdims=True
+                        # )
                     data_dict["displacement"] = displacement[idx_part]
                     data_dict["index_valid_keys"].append("displacement")
                 data_part_list.append(data_part)

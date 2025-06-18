@@ -221,3 +221,71 @@ class DiceLoss(nn.Module):
                 total_loss += dice_loss
         loss = total_loss / num_classes
         return self.loss_weight * loss
+
+
+
+def _binary_cross_entropy(pred, target):
+    # pred는 Sigmoid를 거친 확률 값 (BFABlock에서 이미 Sigmoid가 적용됨)
+    # target은 float 타입의 0 또는 1 (N, 1) 또는 (N,)
+    return F.binary_cross_entropy(pred, target.float())
+
+# BoundarySemanticLoss 내부에서 사용할 Binary Dice Loss 함수
+def _binary_dice_loss(pred, target, smooth=1e-5, exponent=2):
+    # pred: (N, 1) 확률 값
+    # target: (N, 1) 또는 (N,) 이진 레이블
+    
+    target = target.float()
+    
+    intersection = (pred * target).sum()
+    union = (pred.pow(exponent).sum() + target.pow(exponent).sum())
+    
+    dice = (2. * intersection + smooth) / (union + smooth)
+    return (1 - dice)
+
+@LOSSES.register_module()
+class BoundarySemanticLoss(nn.Module):
+    def __init__(self, semantic_loss_weight=1.0, boundary_loss_weight=1.0,
+                 ignore_index=-1, num_semantic_classes=None):
+        super().__init__()
+        self.semantic_loss_weight = semantic_loss_weight
+        self.boundary_loss_weight = boundary_loss_weight
+        self.ignore_index = ignore_index
+        # num_semantic_classes는 DiceLoss에서 F.one_hot에 필요합니다.
+        # Config에서 넘어오지 않을 경우를 대비한 기본값.
+        self.num_semantic_classes = num_semantic_classes if num_semantic_classes is not None else 20 
+        
+        # Semantic Loss 구성: CrossEntropyLoss + DiceLoss
+        # 이 파일에 이미 정의된 CrossEntropyLoss와 DiceLoss 클래스를 재사용합니다.
+        self.ce_loss = CrossEntropyLoss(ignore_index=ignore_index, reduction='mean')
+        self.dice_loss_semantic = DiceLoss(ignore_index=ignore_index, exponent=2)
+        
+        # Binary Cross Entropy 및 Binary Dice는 헬퍼 함수로 정의했으므로 별도 초기화 필요 없음.
+        # 만약 BinaryFocalLoss를 사용하고 싶다면, 이곳에 self.bce_loss = BinaryFocalLoss(...) 등으로 초기화 가능.
+
+    def forward(self, seg_logits, gt_semantic_label, boundary_logits, gt_boundary_label):
+        # 1. Semantic Loss (CrossEntropy + Dice)
+        loss_sem_ce = self.ce_loss(seg_logits, gt_semantic_label)
+        loss_sem_dice = self.dice_loss_semantic(seg_logits, gt_semantic_label)
+        
+        total_loss_semantic = loss_sem_ce + loss_sem_dice # BFANet 논문의 L_sem
+        
+        losses = {'loss_semantic': total_loss_semantic * self.semantic_loss_weight}
+
+        # 2. Boundary Loss (Binary Cross Entropy + Binary Dice)
+        # BFABlock에서 boundary_logits는 이미 Sigmoid를 통과한 확률 값입니다.
+        # 따라서 F.binary_cross_entropy_with_logits 대신 F.binary_cross_entropy를 사용합니다.
+        # gt_boundary_label의 차원을 (N, 1)로 맞춰줍니다.
+        if gt_boundary_label.dim() == 1:
+            gt_boundary_label = gt_boundary_label.unsqueeze(-1) # (N,) -> (N,1)
+        
+        loss_bou_bce = _binary_cross_entropy(boundary_logits, gt_boundary_label)
+        loss_bou_dice = _binary_dice_loss(boundary_logits, gt_boundary_label)
+        
+        total_loss_boundary = loss_bou_bce + loss_bou_dice # BFANet 논문의 L_bou
+        
+        losses['loss_boundary'] = total_loss_boundary * self.boundary_loss_weight
+        
+        # 최종 합산 Loss (Runner가 참조하는 메인 Loss)
+        losses['loss'] = sum(_loss for _loss in losses.values())
+        
+        return losses

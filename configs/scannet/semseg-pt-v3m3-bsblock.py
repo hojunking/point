@@ -1,39 +1,81 @@
 _base_ = ["../_base_/default_runtime.py"]
 
 # misc custom setting
-batch_size = 24  # bs: total bs in all gpus
-num_worker = 24
+batch_size = 4  # bs: total bs in all gpus
+num_worker = 16
 mix_prob = 0.8
 empty_cache = False
 enable_amp = True
-seed = 43244662
 enable_wandb = False
+seed = 43244662
 
 # model settings
 model = dict(
-    type="DefaultSegmentor",
+    type="SegmentorBS",
+    num_classes=20,
+    backbone_out_channels=64,
     backbone=dict(
-        type="SpUNet-v1m1",
-        in_channels=7,
-        num_classes=20,
-        channels=(32, 64, 128, 256, 256, 128, 96, 96),
-        layers=(2, 3, 4, 6, 2, 2, 2, 2),
-    ),
-    criteria=[dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=-1)],
-)
+        type="PT-v3m3",
+        in_channels=6,
+        order=("z", "z-trans", "hilbert", "hilbert-trans"),
+        stride=(2, 2, 2, 2),
+        enc_depths=(2, 2, 2, 6, 2),
+        enc_channels=(32, 64, 128, 256, 512),
+        enc_num_head=(2, 4, 8, 16, 32),
+        enc_patch_size=(1024, 1024, 1024, 1024, 1024),
+        dec_depths=(2, 2, 2, 2),
+        dec_channels=(64, 64, 128, 256),
+        dec_num_head=(4, 4, 8, 16),
+        dec_patch_size=(1024, 1024, 1024, 1024),
+        mlp_ratio=4,
+        qkv_bias=True,
+        qk_scale=None,
+        attn_drop=0.0,
+        proj_drop=0.0,
+        drop_path=0.3,
+        shuffle_orders=True,
+        pre_norm=True,
+        enable_rpe=False,
+        enable_flash=True,
+        upcast_attention=False,
+        upcast_softmax=False,
+        cls_mode=False,
+        pdnorm_bn=False,
+        pdnorm_ln=False,
+        pdnorm_decouple=True,
+        pdnorm_adaptive=False,
+        pdnorm_affine=True,
+        pdnorm_conditions=("ScanNet", "S3DIS", "Structured3D"),
 
+        bsblock_cfg=dict(
+            in_channels=64,  # PTv3 dec_channels[0]과 일치 
+            semantic_out_channels=64, # DefaultSegmentorBS의 backbone_out_channels와 일치 
+            boundary_feature_channels=128, # BFANet 논문 참조 
+            num_heads=8, # BFANet 논문 참조 
+            dropout=[0.0, 0.0],
+        ),
+    ),
+    criteria=dict( # <--- 변경: 단일 BoundarySemanticLoss 사용
+            type="BoundarySemanticLoss", # 새로운 Loss 클래스 이름 (misc.py에 추가)
+            semantic_loss_weight=1.0, # Semantic Loss 가중치
+            boundary_loss_weight=1.0, # Boundary Loss 가중치
+            ignore_index=-1, # Dataset의 ignore_index와 일치
+            num_semantic_classes=20, # 데이터셋의 클래스 수와 일치
+        ),
+)
 
 # scheduler settings
 epoch = 800
-optimizer = dict(type="SGD", lr=0.05, momentum=0.9, weight_decay=0.0001, nesterov=True)
+optimizer = dict(type="AdamW", lr=0.006, weight_decay=0.05)
 scheduler = dict(
     type="OneCycleLR",
-    max_lr=optimizer["lr"],
+    max_lr=[0.006, 0.0006],
     pct_start=0.05,
     anneal_strategy="cos",
     div_factor=10.0,
-    final_div_factor=10000.0,
+    final_div_factor=1000.0,
 )
+param_dicts = [dict(keyword="block", lr=0.0006)]
 
 # dataset settings
 dataset_type = "ScanNetDataset"
@@ -95,16 +137,16 @@ data = dict(
                 mode="train",
                 return_grid_coord=True,
             ),
-            dict(type="SphereCrop", point_max=100000, mode="random"),
+            dict(type="SphereCrop", point_max=102400, mode="random"),
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
-            dict(type="ShufflePoint"),
+            # dict(type="ShufflePoint"),
             dict(type="ToTensor"),
             dict(
                 type="Collect",
-                keys=("coord", "grid_coord", "segment"),
-#                feat_keys=("color", "normal"),
-                feat_keys=("color", "normal", "features"),
+                keys=("coord", "grid_coord", "segment", "boundary"),
+                feat_keys=("color", "normal"),
+                #feat_keys=("color", "normal", "features"),
 
             ),
         ],
@@ -115,7 +157,6 @@ data = dict(
         split="val",
         data_root=data_root,
         #lr_file="data/scannet/valid20_samples.txt",
-
         transform=[
             dict(type="CenterShift", apply_z=True),
             dict(
@@ -125,16 +166,14 @@ data = dict(
                 mode="train",
                 return_grid_coord=True,
             ),
-            # dict(type="SphereCrop", point_max=1000000, mode="center"),
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
             dict(type="ToTensor"),
             dict(
                 type="Collect",
-                keys=("coord", "grid_coord", "segment"),
-       #         feat_keys=("color", "normal"),
-                feat_keys=("color", "normal", "features"),
-
+                keys=("coord", "grid_coord", "segment", "boundary"),
+                feat_keys=("color", "normal"),
+                #feat_keys=("color", "normal", "features"),
             ),
         ],
         test_mode=False,
@@ -144,6 +183,7 @@ data = dict(
         split="val",
         data_root=data_root,
         #lr_file="data/scannet/valid20_samples.txt",
+
         transform=[
             dict(type="CenterShift", apply_z=True),
             dict(type="NormalizeColor"),
@@ -163,10 +203,9 @@ data = dict(
                 dict(type="ToTensor"),
                 dict(
                     type="Collect",
-                    keys=("coord", "grid_coord", "index"),
-    #                feat_keys=("color", "normal"),
-                    feat_keys=("color", "normal", "features"),
-
+                    keys=("coord", "grid_coord", "index", "boundary"),
+                    feat_keys=("color", "normal"),
+                    #feat_keys=("color", "normal", "features"),
                 ),
             ],
             aug_transform=[
