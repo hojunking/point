@@ -225,15 +225,11 @@ class DiceLoss(nn.Module):
 
 
 def _binary_cross_entropy(pred, target):
-    # pred는 이제 BFABlock에서 Sigmoid를 거치지 않은 로짓(logits) 값입니다.
-    # 따라서 F.binary_cross_entropy_with_logits를 사용합니다.
     return F.binary_cross_entropy_with_logits(pred, target.float())
 
 # BoundarySemanticLoss 내부에서 사용할 Binary Dice Loss 함수
 def _binary_dice_loss(pred, target, smooth=1e-5, exponent=2):
-    # pred: (N, 1) 확률 값
-    # target: (N, 1) 또는 (N,) 이진 레이블
-    pred_prob = torch.sigmoid(pred) # <--- 이 라인 추가 (로짓 -> 확률)
+    pred_prob = torch.sigmoid(pred) # 로짓을 확률로 변환
     target = target.float()
     
     intersection = (pred_prob * target).sum()
@@ -250,12 +246,8 @@ class BoundarySemanticLoss(nn.Module):
         self.semantic_loss_weight = semantic_loss_weight
         self.boundary_loss_weight = boundary_loss_weight
         self.ignore_index = ignore_index
-        # num_semantic_classes는 DiceLoss에서 F.one_hot에 필요합니다.
-        # Config에서 넘어오지 않을 경우를 대비한 기본값.
         self.num_semantic_classes = num_semantic_classes if num_semantic_classes is not None else 20 
         
-        # Semantic Loss 구성: CrossEntropyLoss + DiceLoss
-        # 이 파일에 이미 정의된 CrossEntropyLoss와 DiceLoss 클래스를 재사용합니다.
         self.ce_loss = CrossEntropyLoss(ignore_index=ignore_index, reduction='mean')
         self.dice_loss_semantic = DiceLoss(ignore_index=ignore_index, exponent=2)
         
@@ -271,22 +263,31 @@ class BoundarySemanticLoss(nn.Module):
         
         losses = {'loss_semantic': total_loss_semantic * self.semantic_loss_weight}
 
-        # 2. Boundary Loss (Binary Cross Entropy + Binary Dice)
-        # BFABlock에서 boundary_logits는 이미 Sigmoid를 통과한 확률 값입니다.
-        # 따라서 F.binary_cross_entropy_with_logits 대신 F.binary_cross_entropy를 사용합니다.
-        # gt_boundary_label의 차원을 (N, 1)로 맞춰줍니다.
         if gt_boundary_label.dim() == 1:
             gt_boundary_label = gt_boundary_label.unsqueeze(-1) # (N,) -> (N,1)
         
-        loss_bou_bce = _binary_cross_entropy(boundary_logits, gt_boundary_label)
-        loss_bou_dice = _binary_dice_loss(boundary_logits, gt_boundary_label)
-        #print(f"Boundary BCE Loss: {loss_bou_bce.item()}, Boundary Dice Loss: {loss_bou_dice.item()}")
+        # --- Boundary Loss를 위한 ignore_index 처리 시작 ---
+        # ignore_index에 해당하지 않는 유효한 포인트들을 마스킹합니다.
+        valid_boundary_mask = (gt_boundary_label != self.ignore_index).squeeze(-1) # (N,1) -> (N,)
         
-        total_loss_boundary = loss_bou_bce + loss_bou_dice # BFANet 논문의 L_bou
+        # 유효한 포인트에 해당하는 예측 로짓과 GT 레이블만 추출합니다.
+        valid_boundary_logits = boundary_logits[valid_boundary_mask]
+        valid_gt_boundary_label = gt_boundary_label[valid_boundary_mask]
+
+        # 유효한 boundary 포인트가 하나도 없는 극단적인 배치인 경우
+        if valid_gt_boundary_label.numel() == 0:
+            # 해당 배치에 대한 Boundary Loss는 0으로 처리하여 NaN을 방지합니다.
+            loss_bou_bce = torch.tensor(0.0, device=boundary_logits.device)
+            loss_bou_dice = torch.tensor(0.0, device=boundary_logits.device)
+        else:
+            # 유효한 포인트에 대해서만 Loss를 계산합니다.
+            loss_bou_bce = _binary_cross_entropy(valid_boundary_logits, valid_gt_boundary_label)
+            loss_bou_dice = _binary_dice_loss(valid_boundary_logits, valid_gt_boundary_label)
+        # --- ignore_index 처리 끝 ---
+
+        total_loss_boundary = loss_bou_bce + loss_bou_dice 
         
         losses['loss_boundary'] = total_loss_boundary * self.boundary_loss_weight
-        
-        # 최종 합산 Loss (Runner가 참조하는 메인 Loss)
         losses['loss'] = sum(_loss for _loss in losses.values())
         
         return losses

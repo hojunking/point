@@ -78,8 +78,9 @@ scheduler = dict(
 param_dicts = [dict(keyword="block", lr=0.0006)]
 
 # dataset settings
-dataset_type = "ScanNetDataset"
+dataset_type = "ScanNetDatasetBoundary"
 data_root = "data/scannet"
+boundary_root = "data/boundary/b_s07-o03"
 
 data = dict(
     num_classes=20,
@@ -110,6 +111,7 @@ data = dict(
         type=dataset_type,
         split="train",
         data_root=data_root,
+        boundary_root=boundary_root,
         lr_file="data/scannet/train100_samples.txt",
         transform=[
             dict(type="CenterShift", apply_z=True),
@@ -156,6 +158,7 @@ data = dict(
         type=dataset_type,
         split="val",
         data_root=data_root,
+        boundary_root=boundary_root,
         lr_file="data/scannet/valid20_samples.txt",
         transform=[
             dict(type="CenterShift", apply_z=True),
@@ -182,6 +185,7 @@ data = dict(
         type=dataset_type,
         split="val",
         data_root=data_root,
+        boundary_root=boundary_root,
         lr_file="data/scannet/valid20_samples.txt",
 
         transform=[

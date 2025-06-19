@@ -18,5 +18,5 @@ do
     -c semseg-pt-v3m3-bsblock \
 
   LOG_PATH="exp/scannet/${EXP_NAME}/train.log"
- python3 ./gspread/gspread_results.py "$LOG_PATH" "$EXP_NAME" sample100_test
+ #python3 ./gspread/gspread_results.py "$LOG_PATH" "$EXP_NAME" sample100_test
 done

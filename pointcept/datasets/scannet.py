@@ -33,7 +33,6 @@ class ScanNetDataset(DefaultDataset):
         "segment20",
         "instance",
         "features",
-        "boundary"
     ]
     class2id = np.array(VALID_CLASS_IDS_20)
 
