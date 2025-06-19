@@ -171,7 +171,7 @@ class Trainer(TrainerBase):
                 ) in self.data_iterator:
                     # => before_step
                     self.before_step()
-                    # => run_step
+                    # => run_stepf
                     self.run_step()
                     # => after_step
                     self.after_step()

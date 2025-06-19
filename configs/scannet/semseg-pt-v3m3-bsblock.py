@@ -55,13 +55,13 @@ model = dict(
             dropout=[0.0, 0.0],
         ),
     ),
-    criteria=dict( # <--- 변경: 단일 BoundarySemanticLoss 사용
+    criteria=[dict( # <--- 변경: 단일 BoundarySemanticLoss 사용
             type="BoundarySemanticLoss", # 새로운 Loss 클래스 이름 (misc.py에 추가)
             semantic_loss_weight=1.0, # Semantic Loss 가중치
-            boundary_loss_weight=1.0, # Boundary Loss 가중치
+            boundary_loss_weight=0.5, # Boundary Loss 가중치
             ignore_index=-1, # Dataset의 ignore_index와 일치
             num_semantic_classes=20, # 데이터셋의 클래스 수와 일치
-        ),
+        )],
 )
 
 # scheduler settings
@@ -110,7 +110,7 @@ data = dict(
         type=dataset_type,
         split="train",
         data_root=data_root,
-        #lr_file="data/scannet/train100_samples.txt",
+        lr_file="data/scannet/train100_samples.txt",
         transform=[
             dict(type="CenterShift", apply_z=True),
             dict(
@@ -156,7 +156,7 @@ data = dict(
         type=dataset_type,
         split="val",
         data_root=data_root,
-        #lr_file="data/scannet/valid20_samples.txt",
+        lr_file="data/scannet/valid20_samples.txt",
         transform=[
             dict(type="CenterShift", apply_z=True),
             dict(
@@ -182,7 +182,7 @@ data = dict(
         type=dataset_type,
         split="val",
         data_root=data_root,
-        #lr_file="data/scannet/valid20_samples.txt",
+        lr_file="data/scannet/valid20_samples.txt",
 
         transform=[
             dict(type="CenterShift", apply_z=True),

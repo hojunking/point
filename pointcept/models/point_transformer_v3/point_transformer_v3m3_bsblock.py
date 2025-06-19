@@ -580,7 +580,7 @@ class BSBlock(PointModule): # PointModule을 상속받아 PointSequential 내에
             nn.PReLU(), # PReLU Activation from BFANet code
             nn.Dropout(dropout[1]),
             nn.Linear(64, 1, bias=True), # 64 -> 1 (binary classification)
-            nn.Sigmoid() # Output as probability
+            #nn.Sigmoid() # Output as probability
         )
 
         # Remap semantic feature to desired output channel for DefaultSegmentorV2's seg_head

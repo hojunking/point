@@ -225,19 +225,19 @@ class DiceLoss(nn.Module):
 
 
 def _binary_cross_entropy(pred, target):
-    # pred는 Sigmoid를 거친 확률 값 (BFABlock에서 이미 Sigmoid가 적용됨)
-    # target은 float 타입의 0 또는 1 (N, 1) 또는 (N,)
-    return F.binary_cross_entropy(pred, target.float())
+    # pred는 이제 BFABlock에서 Sigmoid를 거치지 않은 로짓(logits) 값입니다.
+    # 따라서 F.binary_cross_entropy_with_logits를 사용합니다.
+    return F.binary_cross_entropy_with_logits(pred, target.float())
 
 # BoundarySemanticLoss 내부에서 사용할 Binary Dice Loss 함수
 def _binary_dice_loss(pred, target, smooth=1e-5, exponent=2):
     # pred: (N, 1) 확률 값
     # target: (N, 1) 또는 (N,) 이진 레이블
-    
+    pred_prob = torch.sigmoid(pred) # <--- 이 라인 추가 (로짓 -> 확률)
     target = target.float()
     
-    intersection = (pred * target).sum()
-    union = (pred.pow(exponent).sum() + target.pow(exponent).sum())
+    intersection = (pred_prob * target).sum()
+    union = (pred_prob.pow(exponent).sum() + target.pow(exponent).sum())
     
     dice = (2. * intersection + smooth) / (union + smooth)
     return (1 - dice)
@@ -280,6 +280,7 @@ class BoundarySemanticLoss(nn.Module):
         
         loss_bou_bce = _binary_cross_entropy(boundary_logits, gt_boundary_label)
         loss_bou_dice = _binary_dice_loss(boundary_logits, gt_boundary_label)
+        #print(f"Boundary BCE Loss: {loss_bou_bce.item()}, Boundary Dice Loss: {loss_bou_dice.item()}")
         
         total_loss_boundary = loss_bou_bce + loss_bou_dice # BFANet 논문의 L_bou
         

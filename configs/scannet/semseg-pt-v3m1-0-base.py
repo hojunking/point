@@ -133,7 +133,7 @@ data = dict(
             dict(type="ToTensor"),
             dict(
                 type="Collect",
-                keys=("coord", "grid_coord", "segment", "boundary"),  # <--- 변경: 'boundary' 키 추가
+                keys=("coord", "grid_coord", "segment"),
                 feat_keys=("color", "normal"),
                 #feat_keys=("color", "normal", "features"),
 
@@ -160,7 +160,7 @@ data = dict(
             dict(type="ToTensor"),
             dict(
                 type="Collect",
-                keys=("coord", "grid_coord", "segment", "boundary"), 
+                keys=("coord", "grid_coord", "segment"),
                 feat_keys=("color", "normal"),
                 #feat_keys=("color", "normal", "features"),
             ),

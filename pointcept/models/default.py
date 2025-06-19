@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch_scatter
 import torch_cluster
 
-from pointcept.models.losses import build_criteria
+from pointcept.models.losses import build_criteria, build_criteria_bs
 from pointcept.models.utils.structure import Point
 from pointcept.models.utils import offset2batch
 from .builder import MODELS, build_model
@@ -244,7 +244,7 @@ class SegmentorBS(nn.Module): # DefaultSegmentorV2를 대체할 새로운 클래
             else nn.Identity()
         )
         self.backbone = build_model(backbone) # PT-v3m3-BSBlock 모델이 여기에 빌드됨.
-        self.criteria = build_criteria(criteria) # BoundarySemanticLoss 인스턴스가 빌드됨.
+        self.criteria = build_criteria_bs(criteria) # BoundarySemanticLoss 인스턴스가 빌드됨.
         self.freeze_backbone = freeze_backbone
         if self.freeze_backbone:
             for p in self.backbone.parameters():
@@ -281,26 +281,26 @@ class SegmentorBS(nn.Module): # DefaultSegmentorV2를 대체할 새로운 클래
             # criteria (BoundarySemanticLoss) 호출
             # semantic_logits과 GT semantic label은 항상 전달
             # boundary_logits과 GT boundary label은 있을 경우에만 전달 (BoundarySemanticLoss 내부에서 조건 처리)
-            loss = self.criteria(
-                seg_logits=seg_logits,
-                gt_semantic_label=input_dict["segment"],
-                boundary_logits=point.boundary_logits, # 새 변수명 사용
-                gt_boundary_label=input_dict["boundary"] # 새 변수명 사용
+            losses_dict = self.criteria(
+                pred= seg_logits,
+                target= input_dict["segment"],
+                boundary_pred= point.boundary_logits, # 새 변수명 사용
+                boundary_target= input_dict["boundary"] # 새 변수명 사용
             )
-            return_dict['loss'] = loss # Loss 반환
+            return_dict.update(losses_dict)
 
         # 모델이 평가 또는 테스트 모드일 때
         else: # not self.training
             # 평가 모드 (GT semantic label이 input_dict에 있는 경우)
             if "segment" in input_dict.keys():
                 # Loss 계산 (훈련과 동일한 방식, 단 gradient 계산은 없음)
-                loss = self.criteria(
-                    seg_logits=seg_logits,
-                    gt_semantic_label=input_dict["segment"],
-                    boundary_logits=point.boundary_logits,
-                    gt_boundary_label=input_dict["boundary"]
+                losses_dict = self.criteria(
+                pred= seg_logits,
+                target= input_dict["segment"],
+                boundary_pred= point.boundary_logits, # 새 변수명 사용
+                boundary_target= input_dict["boundary"] # 새 변수명 사용
                 )
-                return_dict['loss'] = loss # Loss 반환
+                return_dict.update(losses_dict)
 
             # 예측 결과는 항상 반환 (평가 및 테스트 모드)
             return_dict["seg_logits"] = seg_logits
