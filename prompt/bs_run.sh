@@ -1,12 +1,12 @@
 #!/bin/bash
 
 DATA_ROOTS=(
-  "data/scannet"
+  "data/boundary/b_s07-o03"
 )
 
 for ROOT in "${DATA_ROOTS[@]}"
 do
-  EXP_NAME="$(basename "$ROOT")-samples_ptv3-bs_b05"
+  EXP_NAME="ptv3-$(basename "$ROOT")-samples"
   echo "Launching training for data_root: $ROOT"
 
   DATA_ROOT="$ROOT" \

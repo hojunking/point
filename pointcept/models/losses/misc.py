@@ -241,53 +241,103 @@ def _binary_dice_loss(pred, target, smooth=1e-5, exponent=2):
 @LOSSES.register_module()
 class BoundarySemanticLoss(nn.Module):
     def __init__(self, semantic_loss_weight=1.0, boundary_loss_weight=1.0,
-                 ignore_index=-1, num_semantic_classes=None):
+                 ignore_index=-1, num_semantic_classes=None, semantic_boundary_weight_factor=9.0):
         super().__init__()
         self.semantic_loss_weight = semantic_loss_weight
         self.boundary_loss_weight = boundary_loss_weight
         self.ignore_index = ignore_index
         self.num_semantic_classes = num_semantic_classes if num_semantic_classes is not None else 20 
-        
-        self.ce_loss = CrossEntropyLoss(ignore_index=ignore_index, reduction='mean')
+        self.semantic_boundary_weight_factor = semantic_boundary_weight_factor
+
+        self.ce_loss = CrossEntropyLoss(ignore_index=ignore_index, reduction='none')
         self.dice_loss_semantic = DiceLoss(ignore_index=ignore_index, exponent=2)
         
         # Binary Cross Entropy 및 Binary Dice는 헬퍼 함수로 정의했으므로 별도 초기화 필요 없음.
         # 만약 BinaryFocalLoss를 사용하고 싶다면, 이곳에 self.bce_loss = BinaryFocalLoss(...) 등으로 초기화 가능.
 
-    def forward(self, seg_logits, gt_semantic_label, boundary_logits, gt_boundary_label):
-        # 1. Semantic Loss (CrossEntropy + Dice)
-        loss_sem_ce = self.ce_loss(seg_logits, gt_semantic_label)
-        loss_sem_dice = self.dice_loss_semantic(seg_logits, gt_semantic_label)
+    def forward(self, initial_sem_logits, initial_bou_logits, final_sem_logits, final_bou_logits,
+                                gt_semantic_label, gt_boundary_label):
         
-        total_loss_semantic = loss_sem_ce + loss_sem_dice # BFANet 논문의 L_sem
-        
-        losses = {'loss_semantic': total_loss_semantic * self.semantic_loss_weight}
-
+        # gt_boundary_label의 차원을 (N, 1)로 맞춰줍니다.
         if gt_boundary_label.dim() == 1:
-            gt_boundary_label = gt_boundary_label.unsqueeze(-1) # (N,) -> (N,1)
-        
-        # --- Boundary Loss를 위한 ignore_index 처리 시작 ---
-        # ignore_index에 해당하지 않는 유효한 포인트들을 마스킹합니다.
-        valid_boundary_mask = (gt_boundary_label != self.ignore_index).squeeze(-1) # (N,1) -> (N,)
-        
-        # 유효한 포인트에 해당하는 예측 로짓과 GT 레이블만 추출합니다.
-        valid_boundary_logits = boundary_logits[valid_boundary_mask]
-        valid_gt_boundary_label = gt_boundary_label[valid_boundary_mask]
-
-        # 유효한 boundary 포인트가 하나도 없는 극단적인 배치인 경우
-        if valid_gt_boundary_label.numel() == 0:
-            # 해당 배치에 대한 Boundary Loss는 0으로 처리하여 NaN을 방지합니다.
-            loss_bou_bce = torch.tensor(0.0, device=boundary_logits.device)
-            loss_bou_dice = torch.tensor(0.0, device=boundary_logits.device)
+            gt_boundary_label_unsqueeze = gt_boundary_label.unsqueeze(-1)
         else:
-            # 유효한 포인트에 대해서만 Loss를 계산합니다.
-            loss_bou_bce = _binary_cross_entropy(valid_boundary_logits, valid_gt_boundary_label)
-            loss_bou_dice = _binary_dice_loss(valid_boundary_logits, valid_gt_boundary_label)
-        # --- ignore_index 처리 끝 ---
-
-        total_loss_boundary = loss_bou_bce + loss_bou_dice 
+            gt_boundary_label_unsqueeze = gt_boundary_label
         
-        losses['loss_boundary'] = total_loss_boundary * self.boundary_loss_weight
-        losses['loss'] = sum(_loss for _loss in losses.values())
+        # === 공통 마스크 (sem_label != -100 대신 gt_semantic_label != ignore_index) ===
+        valid_semantic_mask = (gt_semantic_label != self.ignore_index) # (N,) bool Tensor
+        
+        sem_weight = torch.ones_like(gt_semantic_label, dtype=torch.float32, device=gt_semantic_label.device)
+        sem_weight += gt_boundary_label_unsqueeze.squeeze(-1).float() * self.semantic_boundary_weight_factor # (N,)
+        
+        # --- 1. 초기 Semantic Loss (BFANet의 sem_score) ---
+        # CE Loss (reduction='none'이므로 각 포인트별 Loss)
+        initial_sem_loss_ce_per_point = self.ce_loss(initial_sem_logits, gt_semantic_label)
+        # sem_weight 적용 (valid_semantic_mask에 해당하는 포인트에만 mean 적용)
+        initial_sem_loss_ce = (initial_sem_loss_ce_per_point * sem_weight)[valid_semantic_mask].mean()
+        
+        # Dice Loss
+        initial_sem_loss_dice = self.dice_loss_semantic(initial_sem_logits, gt_semantic_label)
+        
+        total_loss_initial_semantic = initial_sem_loss_ce + initial_sem_loss_dice 
+
+        # --- 2. 초기 Boundary Loss (BFANet의 margin_score) ---
+        # BCE Loss (원본은 weight=weight_mask 사용)
+        # 유효한 포인트만 추출하여 Loss를 계산하는 방식(valid_boundary_mask)을 사용합니다.
+        
+        valid_boundary_mask_initial = (gt_boundary_label_unsqueeze != self.ignore_index).squeeze(-1)
+        valid_initial_bou_logits = initial_bou_logits[valid_boundary_mask_initial]
+        valid_gt_boundary_label_initial = gt_boundary_label_unsqueeze[valid_boundary_mask_initial]
+
+        if valid_gt_boundary_label_initial.numel() == 0:
+            loss_initial_bou_bce = torch.tensor(0.0, device=initial_bou_logits.device)
+            loss_initial_bou_dice = torch.tensor(0.0, device=initial_bou_logits.device)
+        else:
+            loss_initial_bou_bce = _binary_cross_entropy(valid_initial_bou_logits, valid_gt_boundary_label_initial)
+            loss_initial_bou_dice = _binary_dice_loss(valid_initial_bou_logits, valid_gt_boundary_label_initial)
+        
+        total_loss_initial_boundary = loss_initial_bou_bce + loss_initial_bou_dice
+
+        # --- 3. 최종 Semantic Loss (BFANet의 sem_score_v2) ---
+        final_sem_loss_ce_per_point = self.ce_loss(final_sem_logits, gt_semantic_label)
+        final_sem_loss_ce = (final_sem_loss_ce_per_point * sem_weight)[valid_semantic_mask].mean()
+
+        final_sem_loss_dice = self.dice_loss_semantic(final_sem_logits, gt_semantic_label)
+        total_loss_final_semantic = final_sem_loss_ce + final_sem_loss_dice
+
+        # --- 4. 최종 Boundary Loss (BFANet의 margin_score_v2) ---
+        valid_boundary_mask_final = (gt_boundary_label_unsqueeze != self.ignore_index).squeeze(-1)
+        valid_final_bou_logits = final_bou_logits[valid_boundary_mask_final]
+        valid_gt_boundary_label_final = gt_boundary_label_unsqueeze[valid_boundary_mask_final]
+
+        if valid_gt_boundary_label_final.numel() == 0:
+            loss_final_bou_bce = torch.tensor(0.0, device=final_bou_logits.device)
+            loss_final_bou_dice = torch.tensor(0.0, device=final_bou_logits.device)
+        else:
+            loss_final_bou_bce = _binary_cross_entropy(valid_final_bou_logits, valid_gt_boundary_label_final)
+            loss_final_bou_dice = _binary_dice_loss(valid_final_bou_logits, valid_gt_boundary_label_final)
+        
+        total_loss_final_boundary = loss_final_bou_bce + loss_final_bou_dice
+
+        # 모든 Loss들을 합산합니다.
+        # 각 Loss 유형에 Config에서 받은 가중치 (semantic_loss_weight, boundary_loss_weight)를 곱합니다.
+        # BFANet 원본은 총 8개 Loss를 단순히 더합니다. 여기서는 BFANet 논문의 L_sem, L_bou를 가중 합산하는 방식으로 통합합니다.
+        # 논문 Loss 식 (4.5절) L = L_sem + L_bou
+        # L_sem = (CE + Dice), L_bou = (BCE + Dice)
+        # BFANet_SegHeader는 v1과 v2 Loss를 각각 계산 후 모두 더합니다.
+        # 즉, L = (L_sem_v1 + L_bou_v1) + (L_sem_v2 + L_bou_v2)
+        total_loss = (total_loss_initial_semantic * self.semantic_loss_weight +
+                      total_loss_initial_boundary * self.boundary_loss_weight +
+                      total_loss_final_semantic * self.semantic_loss_weight + # v2 Loss에 동일 가중치 적용
+                      total_loss_final_boundary * self.boundary_loss_weight) # v2 Loss에 동일 가중치 적용
+        
+        # 반환 딕셔너리에 모든 세부 Loss를 포함
+        losses = {
+            'loss_initial_semantic': total_loss_initial_semantic * self.semantic_loss_weight,
+            'loss_initial_boundary': total_loss_initial_boundary * self.boundary_loss_weight,
+            'loss_final_semantic': total_loss_final_semantic * self.semantic_loss_weight,
+            'loss_final_boundary': total_loss_final_boundary * self.boundary_loss_weight,
+            'loss': total_loss # 최종 총 Loss
+        }
         
         return losses

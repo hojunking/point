@@ -522,17 +522,17 @@ class BSBlock(PointModule): # PointModule을 상속받아 PointSequential 내에
         boundary_feature_channels: int = 128, # BFANet 논문의 classifier_feat/margin_feat 출력 채널 (128)
         num_heads: int = 8, # Attention head 수 (BFANet 논문 참고)
         dropout: list = [0.0, 0.0], # BFANet 논문 코드의 dropout 값
+        num_semantic_classes: int = 20,
     ):
         super().__init__()
         self.in_channels = in_channels
-        self.semantic_out_channels = semantic_out_channels
+        self.semantic_out_channels = semantic_out_channels # 초기화는 하지만 직접적인 출력 채널은 아님
         self.boundary_feature_channels = boundary_feature_channels
         self.num_heads = num_heads
-        # BFANet 코드에서 C=128, H=8이므로 C_prime = C/H = 16
         self.head_dim = self.boundary_feature_channels // self.num_heads 
-        self.scale = 1.0 # BFANet 코드와 동일
+        self.scale = 1.0 
 
-        # Corresponding to classifier_feat and margin_feat in BFANet_SegHeader
+        # Corresponds to classifier_feat and margin_feat in BFANet_SegHeader
         self.semantic_init_mlp = nn.Sequential(
             nn.Linear(in_channels, boundary_feature_channels), # in_channels (64) -> 128
             nn.BatchNorm1d(boundary_feature_channels),
@@ -544,18 +544,34 @@ class BSBlock(PointModule): # PointModule을 상속받아 PointSequential 내에
             nn.LeakyReLU()
         )
 
+        self.initial_semantic_head = nn.Sequential(
+            nn.Dropout(dropout[0]),
+            nn.Linear(boundary_feature_channels, 64), 
+            nn.BatchNorm1d(64),
+            nn.PReLU(),
+            nn.Dropout(dropout[1]),
+            nn.Linear(64, num_semantic_classes, bias=True) # out_channels (클래스 수)
+        )
+        self.initial_boundary_head = nn.Sequential(
+            nn.Dropout(dropout[0]),
+            nn.Linear(boundary_feature_channels, 64),
+            nn.BatchNorm1d(64),
+            nn.PReLU(),
+            nn.Dropout(dropout[1]),
+            nn.Linear(64, 1, bias=True) # 1 (이진 분류)
+        )
+
         # Corresponding to sem_qkv and margin_qkv in BFANet_SegHeader
         self.sem_qkv = nn.Sequential(
-            nn.Linear(boundary_feature_channels, boundary_feature_channels * 3), # 128 -> 384 (Q,K,V 각 128)
+            nn.Linear(boundary_feature_channels, boundary_feature_channels * 3), 
             nn.BatchNorm1d(boundary_feature_channels * 3),
             nn.LeakyReLU()
         )
         self.margin_qkv = nn.Sequential(
-            nn.Linear(boundary_feature_channels, boundary_feature_channels * 3), # 128 -> 384 (Q,K,V 각 128)
+            nn.Linear(boundary_feature_channels, boundary_feature_channels * 3), 
             nn.BatchNorm1d(boundary_feature_channels * 3),
             nn.LeakyReLU()
         )
-        
         # Corresponding to fusion_q in BFANet_SegHeader
         # input: (N, 2 * boundary_feature_channels) = (N, 256)
         # output: (N, boundary_feature_channels) = (N, 128)
@@ -573,21 +589,22 @@ class BSBlock(PointModule): # PointModule을 상속받아 PointSequential 내에
 
         # Boundary Prediction Head
         # Takes `margin_out_fused` (N, 128) and outputs (N, 1) probability
-        self.boundary_pred_head = nn.Sequential(
+        self.final_semantic_head = nn.Sequential(
             nn.Dropout(dropout[0]),
-            nn.Linear(boundary_feature_channels, 64), # 128 -> 64
+            nn.Linear(boundary_feature_channels, 64), 
             nn.BatchNorm1d(64),
-            nn.PReLU(), # PReLU Activation from BFANet code
+            nn.PReLU(),
             nn.Dropout(dropout[1]),
-            nn.Linear(64, 1, bias=True), # 64 -> 1 (binary classification)
-            #nn.Sigmoid() # Output as probability
+            nn.Linear(64, num_semantic_classes, bias=True) # out_channels (클래스 수)
         )
-
-        # Remap semantic feature to desired output channel for DefaultSegmentorV2's seg_head
-        if semantic_out_channels != boundary_feature_channels:
-            self.semantic_remap_head = nn.Linear(boundary_feature_channels, semantic_out_channels)
-        else:
-            self.semantic_remap_head = nn.Identity()
+        self.final_boundary_head = nn.Sequential(
+            nn.Dropout(dropout[0]),
+            nn.Linear(boundary_feature_channels, 64), 
+            nn.BatchNorm1d(64),
+            nn.PReLU(),
+            nn.Dropout(dropout[1]),
+            nn.Linear(64, 1, bias=True) # 1 (이진 분류)
+        )
 
 
     def forward(self, point: Point):
@@ -597,6 +614,9 @@ class BSBlock(PointModule): # PointModule을 상속받아 PointSequential 내에
         # 1. Decouple initial semantic and boundary features
         sem_out_init = self.semantic_init_mlp(fo)
         margin_out_init = self.boundary_init_mlp(fo)
+
+        initial_sem_logits = self.initial_semantic_head(sem_out_init)
+        initial_bou_logits = self.initial_boundary_head(margin_out_init)
 
         # 2. Generate QKV for Attention
         qkv_s_raw = self.sem_qkv(sem_out_init)
@@ -631,14 +651,14 @@ class BSBlock(PointModule): # PointModule을 상속받아 PointSequential 내에
         margin_out_fused = (attn_bou @ v_m_for_attn).view(fo.shape[0], -1)
 
         # 7. Final Boundary Prediction Logits
-        boundary_logits = self.boundary_pred_head(margin_out_fused)
-
-        # 8. Remap semantic feature to desired output channel
-        fs = self.semantic_remap_head(sem_out_fused)
+        final_sem_logits = self.final_semantic_head(sem_out_fused)
+        final_bou_logits = self.final_boundary_head(margin_out_fused)
 
         # Update Point object: point.feat for semantic head, and add boundary_pred_logits
-        point.feat = fs
-        point.boundary_logits = boundary_logits 
+        point.initial_semantic_logits = initial_sem_logits
+        point.initial_boundary_logits = initial_bou_logits
+        point.final_semantic_logits = final_sem_logits
+        point.final_boundary_logits = final_bou_logits
 
         return point 
 

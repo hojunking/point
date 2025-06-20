@@ -51,8 +51,9 @@ model = dict(
             in_channels=64,  # PTv3 dec_channels[0]과 일치 
             semantic_out_channels=64, # DefaultSegmentorBS의 backbone_out_channels와 일치 
             boundary_feature_channels=128, # BFANet 논문 참조 
-            num_heads=8, # BFANet 논문 참조 
+            num_heads=8, 
             dropout=[0.0, 0.0],
+            num_semantic_classes=20,
         ),
     ),
     criteria=[dict( # <--- 변경: 단일 BoundarySemanticLoss 사용
@@ -61,21 +62,25 @@ model = dict(
             boundary_loss_weight=0.5, # Boundary Loss 가중치
             ignore_index=-1, # Dataset의 ignore_index와 일치
             num_semantic_classes=20, # 데이터셋의 클래스 수와 일치
+            semantic_boundary_weight_factor=9.0
         )],
 )
 
 # scheduler settings
 epoch = 800
-optimizer = dict(type="AdamW", lr=0.006, weight_decay=0.05)
+#optimizer = dict(type="AdamW", lr=0.006, weight_decay=0.05)
+optimizer = dict(type="AdamW", lr=0.003, weight_decay=0.05)
 scheduler = dict(
     type="OneCycleLR",
-    max_lr=[0.006, 0.0006],
+    #max_lr=[0.006, 0.0006],
+    max_lr=[0.003, 0.0003],
     pct_start=0.05,
     anneal_strategy="cos",
     div_factor=10.0,
     final_div_factor=1000.0,
 )
-param_dicts = [dict(keyword="block", lr=0.0006)]
+#param_dicts = [dict(keyword="block", lr=0.0006)]
+param_dicts = [dict(keyword="block", lr=0.0003)]
 
 # dataset settings
 dataset_type = "ScanNetDatasetBoundary"

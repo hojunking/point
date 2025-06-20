@@ -33,12 +33,17 @@ class Criteria_bs(object):
         for loss_cfg in self.cfg:
             self.criteria.append(LOSSES.build(cfg=loss_cfg))
 
-    def __call__(self, pred, target, boundary_pred, boundary_target):
-        if len(self.criteria) == 0:
-            # loss computation occur in model
-            return pred
+    def __call__(self, initial_sem_logits, 
+                 initial_bou_logits, 
+                 final_sem_logits, 
+                 final_bou_logits, 
+                 gt_semantic_label, gt_boundary_label):
         
-        loss = self.criteria[0](pred, target, boundary_pred, boundary_target)
+        loss = self.criteria[0](initial_sem_logits, 
+                                initial_bou_logits, 
+                                final_sem_logits, 
+                                final_bou_logits,
+                                gt_semantic_label, gt_boundary_label)
         return loss
     
 def build_criteria(cfg):
