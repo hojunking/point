@@ -103,9 +103,9 @@ then
     --machine-rank ${SLURM_NODEID:-0} \
     --dist-url ${DIST_URL} \
     --options save_path="$EXP_DIR" \
-      data.train.boundary_root="$DATA_ROOT" \
-     data.val.boundary_root="$DATA_ROOT" \
-     data.test.boundary_root="$DATA_ROOT" 
+      data.train.features_root="$DATA_ROOT" \
+     data.val.features_root="$DATA_ROOT" \
+     data.test.features_root="$DATA_ROOT" 
 else
     $PYTHON "$CODE_DIR"/tools/$TRAIN_CODE \
     --config-file "$CONFIG_DIR" \

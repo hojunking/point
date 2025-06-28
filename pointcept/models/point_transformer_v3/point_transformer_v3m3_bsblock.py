@@ -521,7 +521,7 @@ class BSBlock(PointModule): # PointModule을 상속받아 PointSequential 내에
         semantic_out_channels: int, # 강화된 Semantic Feature 출력 채널 (Config 상 64 예상)
         boundary_feature_channels: int = 128, # BFANet 논문의 classifier_feat/margin_feat 출력 채널 (128)
         num_heads: int = 8, # Attention head 수 (BFANet 논문 참고)
-        dropout: list = [0.0, 0.0], # BFANet 논문 코드의 dropout 값
+        dropout: list = [0.2, 0.2], # BFANet 논문 코드의 dropout 값
         num_semantic_classes: int = 20,
     ):
         super().__init__()

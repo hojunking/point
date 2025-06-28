@@ -9,6 +9,21 @@ enable_amp = True
 enable_wandb = False
 seed = 43244662
 
+
+
+features_flag = ["scale", "opacity", "rotation"]
+
+# === 동적으로 in_channels 계산 시작 ===
+_base_input_channels = 9 # coord(3) + color(3) + normal(3)
+_custom_features_dim = 0
+if "scale" in features_flag:
+    _custom_features_dim += 3
+if "opacity" in features_flag:
+    _custom_features_dim += 1
+if "rotation" in features_flag:
+    _custom_features_dim += 4
+_total_input_channels = _base_input_channels + _custom_features_dim
+
 # model settings
 model = dict(
     type="SegmentorBS",
@@ -16,7 +31,7 @@ model = dict(
     backbone_out_channels=64,
     backbone=dict(
         type="PT-v3m3",
-        in_channels=6,
+        in_channels=_total_input_channels,
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(2, 2, 2, 2),
         enc_depths=(2, 2, 2, 6, 2),
@@ -59,7 +74,7 @@ model = dict(
     criteria=[dict( # <--- 변경: 단일 BoundarySemanticLoss 사용
             type="BoundarySemanticLoss", # 새로운 Loss 클래스 이름 (misc.py에 추가)
             semantic_loss_weight=1.0, # Semantic Loss 가중치
-            boundary_loss_weight=0.5, # Boundary Loss 가중치
+            boundary_loss_weight=1.0, # Boundary Loss 가중치
             ignore_index=-1, # Dataset의 ignore_index와 일치
             num_semantic_classes=20, # 데이터셋의 클래스 수와 일치
             semantic_boundary_weight_factor=9.0
@@ -69,23 +84,24 @@ model = dict(
 # scheduler settings
 epoch = 800
 #optimizer = dict(type="AdamW", lr=0.006, weight_decay=0.05)
-optimizer = dict(type="AdamW", lr=0.003, weight_decay=0.05)
+optimizer = dict(type="AdamW", lr=0.006, weight_decay=0.05)
 scheduler = dict(
     type="OneCycleLR",
     #max_lr=[0.006, 0.0006],
-    max_lr=[0.003, 0.0003],
+    max_lr=[0.006, 0.0006],
     pct_start=0.05,
     anneal_strategy="cos",
     div_factor=10.0,
     final_div_factor=1000.0,
 )
 #param_dicts = [dict(keyword="block", lr=0.0006)]
-param_dicts = [dict(keyword="block", lr=0.0003)]
+param_dicts = [dict(keyword="block", lr=0.0006)]
 
 # dataset settings
 dataset_type = "ScanNetDatasetBoundary"
 data_root = "data/scannet"
 boundary_root = "data/boundary/b_s07-o03"
+features_root = "data/scannet/features/base_3dgs"
 
 data = dict(
     num_classes=20,
