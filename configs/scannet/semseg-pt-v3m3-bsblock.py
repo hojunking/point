@@ -9,12 +9,10 @@ enable_amp = True
 enable_wandb = False
 seed = 43244662
 
-
-
-features_flag = ["scale", "opacity", "rotation"]
+features_flag = locals().get("features_flag", ["scale"])
 
 # === 동적으로 in_channels 계산 시작 ===
-_base_input_channels = 9 # coord(3) + color(3) + normal(3)
+_base_input_channels = 6 # coord(3) + color(3) + normal(3)
 _custom_features_dim = 0
 if "scale" in features_flag:
     _custom_features_dim += 3
@@ -23,6 +21,7 @@ if "opacity" in features_flag:
 if "rotation" in features_flag:
     _custom_features_dim += 4
 _total_input_channels = _base_input_channels + _custom_features_dim
+print(f"Total input channels: {_total_input_channels} (Base: {_base_input_channels}, Custom: {_custom_features_dim})")
 
 # model settings
 model = dict(
@@ -100,8 +99,12 @@ param_dicts = [dict(keyword="block", lr=0.0006)]
 # dataset settings
 dataset_type = "ScanNetDatasetBoundary"
 data_root = "data/scannet"
-boundary_root = "data/boundary/b_s07-o03"
-features_root = "data/scannet/features/base_3dgs"
+boundary_root = locals().get("boundary_root", "")
+features_root = "data/features/base_Pup3dgs"  # 기본 features.npy 경로
+
+print(f"[Config Debug] boundary_root: {boundary_root}")
+print(f"[Config Debug] features_root: {features_root}")
+print(f"[Config Debug] features_flag: {features_flag}")
 
 data = dict(
     num_classes=20,
@@ -132,6 +135,8 @@ data = dict(
         type=dataset_type,
         split="train",
         data_root=data_root,
+        features_root=features_root,
+        features_flag=features_flag,
         boundary_root=boundary_root,
         lr_file="data/scannet/train100_samples.txt",
         transform=[
@@ -168,8 +173,8 @@ data = dict(
             dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "boundary"),
-                feat_keys=("color", "normal"),
-                #feat_keys=("color", "normal", "features"),
+                #feat_keys=("color", "normal"),
+                feat_keys=("color", "normal", "features"),
 
             ),
         ],
@@ -180,6 +185,8 @@ data = dict(
         split="val",
         data_root=data_root,
         boundary_root=boundary_root,
+        features_root=features_root,
+        features_flag=features_flag,
         lr_file="data/scannet/valid20_samples.txt",
         transform=[
             dict(type="CenterShift", apply_z=True),
@@ -196,8 +203,8 @@ data = dict(
             dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "boundary"),
-                feat_keys=("color", "normal"),
-                #feat_keys=("color", "normal", "features"),
+                #feat_keys=("color", "normal"),
+                feat_keys=("color", "normal", "features"),
             ),
         ],
         test_mode=False,
@@ -207,6 +214,8 @@ data = dict(
         split="val",
         data_root=data_root,
         boundary_root=boundary_root,
+        features_root=features_root,
+        features_flag=features_flag,
         lr_file="data/scannet/valid20_samples.txt",
 
         transform=[
@@ -229,8 +238,8 @@ data = dict(
                 dict(
                     type="Collect",
                     keys=("coord", "grid_coord", "index", "boundary"),
-                    feat_keys=("color", "normal"),
-                    #feat_keys=("color", "normal", "features"),
+                    #feat_keys=("color", "normal"),
+                    feat_keys=("color", "normal", "features"),
                 ),
             ],
             aug_transform=[

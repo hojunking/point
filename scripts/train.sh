@@ -93,6 +93,7 @@ echo "Running code in: $CODE_DIR"
 
 
 echo " =========> RUN TASK <========="
+echo "boundary_root: ${BOUNDARY_ROOT}"
 
 if [ "${WEIGHT}" = "None" ]
 then
@@ -103,9 +104,11 @@ then
     --machine-rank ${SLURM_NODEID:-0} \
     --dist-url ${DIST_URL} \
     --options save_path="$EXP_DIR" \
-      data.train.features_root="$DATA_ROOT" \
-     data.val.features_root="$DATA_ROOT" \
-     data.test.features_root="$DATA_ROOT" 
+      boundary_root="$BOUNDARY_ROOT" \
+      data.train.boundary_root="$BOUNDARY_ROOT" \
+      data.val.boundary_root="$BOUNDARY_ROOT" \
+      data.test.boundary_root="$BOUNDARY_ROOT" \
+      features_flag="$FEATURES_FLAG"
 else
     $PYTHON "$CODE_DIR"/tools/$TRAIN_CODE \
     --config-file "$CONFIG_DIR" \
