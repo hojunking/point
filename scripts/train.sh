@@ -48,8 +48,7 @@ while getopts "p:d:c:n:w:g:m:r:" opt; do
   esac
 done
 
-if [ "${NUM_GPU}" = 'None' ]
-then
+if [ "${NUM_GPU}" = 'None' ]; then
   NUM_GPU=`$PYTHON -c 'import torch; print(torch.cuda.device_count())'`
 fi
 
@@ -77,8 +76,7 @@ CONFIG_DIR=configs/${DATASET}/${CONFIG}.py
 
 echo " =========> CREATE EXP DIR <========="
 echo "Experiment dir: $ROOT_DIR/$EXP_DIR"
-if [ "${RESUME}" = true ] && [ -d "$EXP_DIR" ]
-then
+if [ "${RESUME}" = true ] && [ -d "$EXP_DIR" ]; then
   CONFIG_DIR=${EXP_DIR}/config.py
   WEIGHT=$MODEL_DIR/model_last.pth
 else
@@ -93,22 +91,19 @@ echo "Running code in: $CODE_DIR"
 
 
 echo " =========> RUN TASK <========="
+# run_f.sh에서 설정한 환경 변수를 확인합니다.
 echo "boundary_root: ${BOUNDARY_ROOT}"
+echo "extra_options: ${EXTRA_OPTIONS}"
 
-if [ "${WEIGHT}" = "None" ]
-then
+# --options 뒤에 모든 인자를 한 줄로 작성하고, 마지막에 $EXTRA_OPTIONS를 추가합니다.
+if [ "${WEIGHT}" = "None" ]; then
     $PYTHON "$CODE_DIR"/tools/$TRAIN_CODE \
     --config-file "$CONFIG_DIR" \
     --num-gpus "$NUM_GPU" \
     --num-machines "$NUM_MACHINE" \
     --machine-rank ${SLURM_NODEID:-0} \
     --dist-url ${DIST_URL} \
-    --options save_path="$EXP_DIR" \
-      boundary_root="$BOUNDARY_ROOT" \
-      data.train.boundary_root="$BOUNDARY_ROOT" \
-      data.val.boundary_root="$BOUNDARY_ROOT" \
-      data.test.boundary_root="$BOUNDARY_ROOT" \
-      features_flag="$FEATURES_FLAG"
+    --options save_path="$EXP_DIR" boundary_root="$BOUNDARY_ROOT" data.train.boundary_root="$BOUNDARY_ROOT" data.val.boundary_root="$BOUNDARY_ROOT" data.test.boundary_root="$BOUNDARY_ROOT" $EXTRA_OPTIONS
 else
     $PYTHON "$CODE_DIR"/tools/$TRAIN_CODE \
     --config-file "$CONFIG_DIR" \
@@ -116,8 +111,5 @@ else
     --num-machines "$NUM_MACHINE" \
     --machine-rank ${SLURM_NODEID:-0} \
     --dist-url ${DIST_URL} \
-    --options save_path="$EXP_DIR" resume="$RESUME" weight="$WEIGHT" \
-      data.train.data_root="$DATA_ROOT" \
-     data.val.data_root="$DATA_ROOT" \
-     data.test.data_root="$DATA_ROOT" 
+    --options save_path="$EXP_DIR" resume="$RESUME" weight="$WEIGHT" data.train.data_root="$DATA_ROOT" data.val.data_root="$DATA_ROOT" data.test.data_root="$DATA_ROOT" $EXTRA_OPTIONS
 fi

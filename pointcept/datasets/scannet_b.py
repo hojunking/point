@@ -41,7 +41,7 @@ class ScanNetDatasetBoundary(ScanNetDataset):
         self.boundary_root = boundary_root
         self.features_root = features_root
         self.features_flag = features_flag
-
+        
         super().__init__(**kwargs)
 
 
@@ -50,7 +50,6 @@ class ScanNetDatasetBoundary(ScanNetDataset):
         data_dict = super().get_data(idx)
 
         scene_name = self.get_data_name(idx) 
-
         # === BFANet: Boundary Label 로딩 로직 (boundary_root 사용) ===
         # 1. boundary_root가 설정되었는지 확인 (TypeError 방지)
         if self.boundary_root is not None:
