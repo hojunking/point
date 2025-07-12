@@ -86,7 +86,7 @@ param_dicts = [dict(keyword="block", lr=0.0006)]
 dataset_type = "ScanNetDatasetBoundary"
 data_root = "data/scannet"
 boundary_root = locals().get("boundary_root", "")
-features_root = "data/features/base_Pup3dgs"  # 기본 features.npy 경로
+features_root = "data/features/scenesplats_3dgs"  # 기본 features.npy 경로
 
 data = dict(
     num_classes=20,
