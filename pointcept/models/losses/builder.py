@@ -45,10 +45,38 @@ class Criteria_bs(object):
                                 final_bou_logits,
                                 gt_semantic_label, gt_boundary_label)
         return loss
+
+class Criteria_distil(object):
+    def __init__(self, cfg=None):
+        self.cfg = cfg if cfg is not None else []
+        self.criteria = []
+        # config에 정의된 모든 loss들을 빌드합니다.
+        for loss_cfg in self.cfg:
+            self.criteria.append(LOSSES.build(cfg=loss_cfg))
     
+    def __call__(self, 
+                 seg_logits,             # Student의 분할 예측 로짓
+                 student_feature_bridged,  # MLP 브릿지를 통과한 Student 특징
+                 teacher_feature,        # Teacher 인코더의 특징
+                 gt_semantic_label):     # 분할 정답 레이블
+        
+        total_semantic_loss = 0
+        # self.criteria 리스트에 있는 모든 손실 함수를 순회하며 계산
+        total_semantic_loss += self.criteria[0](seg_logits, gt_semantic_label)
+        total_semantic_loss += self.criteria[1](seg_logits, gt_semantic_label)
+        
+        if student_feature_bridged is not None and teacher_feature is not None:
+            distill_loss = self.criteria[2](student_feature_bridged, teacher_feature)
+        else:
+            distill_loss = 0.0
+            
+        return total_semantic_loss, distill_loss # 최종 합산된 스칼라 손실 값만 반환
+  
 def build_criteria(cfg):
     return Criteria(cfg)
 
 def build_criteria_bs(cfg):
     return Criteria_bs(cfg)
-    
+
+def build_criteria_distil(cfg):
+    return Criteria_distil(cfg)

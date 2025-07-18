@@ -6,8 +6,8 @@ Dataset: ScanNet v2, ScanNet++, S3DIS, HM3D, ArkitScene, Structured3D
 _base_ = ["../_base_/default_runtime.py"]
 
 # misc custom setting
-batch_size = 96  # bs: total bs in all gpus
-num_worker = 96
+batch_size = 1  # bs: total bs in all gpus
+num_worker = 12
 mix_prob = 0
 clip_grad = 3.0
 empty_cache = False
@@ -15,6 +15,7 @@ enable_amp = True
 amp_dtype = "bfloat16"
 evaluate = False
 find_unused_parameters = False
+enable_wandb = False
 
 
 # model settings
@@ -23,7 +24,7 @@ model = dict(
     # backbone - student & teacher
     backbone=dict(
         type="PT-v3m2",
-        in_channels=9,
+        in_channels=7,
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(2, 2, 2, 2),
         enc_depths=(3, 3, 3, 12, 3),
@@ -79,8 +80,8 @@ model = dict(
 )
 
 # scheduler settings
-epoch = 200
-base_lr = 0.004
+epoch = 100
+base_lr = 0.002
 lr_decay = 0.9  # layer-wise lr decay
 
 base_wd = 0.04  # wd scheduler enable in hooks
@@ -113,7 +114,7 @@ transform = [
     dict(type="Copy", keys_dict={"coord": "origin_coord"}),
     dict(
         type="MultiViewGenerator",
-        view_keys=("coord", "origin_coord", "color", "normal"),
+        view_keys=("coord", "origin_coord", "color", "features"),
         global_view_num=2,
         global_view_scale=(0.4, 1.0),
         local_view_num=4,
@@ -182,75 +183,28 @@ transform = [
             "name",
         ),
         offset_keys_dict=dict(),
-        global_feat_keys=("global_coord", "global_color", "global_normal"),
-        local_feat_keys=("local_coord", "local_color", "local_normal"),
+        # global_feat_keys=("global_coord", "global_color", "global_normal"),
+        # local_feat_keys=("local_coord", "local_color", "local_normal"),
+        global_feat_keys=("global_coord", "global_color", "global_features"),
+        local_feat_keys=("local_coord", "local_color", "local_features"),
     ),
 ]
 
+boundary_root = locals().get("boundary_root", "")
+features_root = "data/features/base_Pup3dgs"  # 기본 features.npy 경로
+dataset_type = "ScanNetDatasetBoundary"
+
 data = dict(
     train=dict(
-        type="ConcatDataset",
-        datasets=[
-            # ScanNet
-            dict(
-                type="ScanNetDataset",
-                split=["train", "val", "test"],
-                data_root="data/scannet",
-                transform=transform,
-                test_mode=False,
-                loop=1,
-            ),
-            # ScanNet++
-            dict(
-                type="ScanNetPPDataset",
-                split=[
-                    "train_grid1mm_chunk6x6_stride3x3",
-                    "val_grid1mm_chunk6x6_stride3x3",
-                    "test_grid1mm_chunk6x6_stride3x3",
-                ],
-                data_root="data/scannetpp",
-                transform=transform,
-                test_mode=False,
-                loop=1,
-            ),
-            # S3DIS
-            dict(
-                type="S3DISDataset",
-                split=["Area_1", "Area_2", "Area_3", "Area_4", "Area_5", "Area_6"],
-                data_root="data/s3dis",
-                transform=transform,
-                test_mode=False,
-                loop=1,
-            ),
-            # ArkitScenes
-            dict(
-                type="DefaultDataset",
-                split=["Training", "Validation"],
-                data_root="data/arkitscenes",
-                transform=transform,
-                test_mode=False,
-                loop=1,
-            ),
-            # HM3D
-            dict(
-                type="HM3DDataset",
-                split=["train", "val"],
-                data_root="data/hm3d",
-                transform=transform,
-                test_mode=False,
-                force_label=False,
-                loop=1,
-            ),
-            # Structured3D
-            dict(
-                type="Structured3DDataset",
-                split=["train", "val", "test"],
-                data_root="data/structured3d",
-                transform=transform,
-                test_mode=False,
-                loop=1,
-            ),
-        ],
+        type=dataset_type,      # 바로 ScanNetDataset을 지정
+        split="train",             # 사용할 데이터 스플릿을 "train"으로 지정
+        data_root="data/scannet",  # 데이터 경로
+        test_mode=False,
+        features_root=features_root,
+        #boundary_root=boundary_root,
+        features_flag=[],
+        transform=transform,       # 이전에 정의된 transform 파이프라인
+
     )
 )
 

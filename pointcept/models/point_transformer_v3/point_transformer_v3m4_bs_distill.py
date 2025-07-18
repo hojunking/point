@@ -1,14 +1,15 @@
 """
-Point Transformer - V3 Mode2
+Point Transformer - V3 Mode1
 
 Author: Xiaoyang Wu (xiaoyang.wu.cs@gmail.com)
 Please cite our work if the code is helpful to you.
 """
 
+from functools import partial
 from addict import Dict
+import math
 import torch
 import torch.nn as nn
-from torch.nn.init import trunc_normal_
 import spconv.pytorch as spconv
 import torch_scatter
 from timm.layers import DropPath
@@ -18,25 +19,11 @@ try:
 except ImportError:
     flash_attn = None
 
+from pointcept.models.point_prompt_training import PDNorm
 from pointcept.models.builder import MODELS
 from pointcept.models.utils.misc import offset2bincount
 from pointcept.models.utils.structure import Point
 from pointcept.models.modules import PointModule, PointSequential
-
-
-class LayerScale(nn.Module):
-    def __init__(
-        self,
-        dim: int,
-        init_values: float = 1e-5,
-        inplace: bool = False,
-    ) -> None:
-        super().__init__()
-        self.inplace = inplace
-        self.gamma = nn.Parameter(init_values * torch.ones(dim))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x.mul_(self.gamma) if self.inplace else x * self.gamma
 
 
 class RPE(torch.nn.Module):
@@ -273,7 +260,6 @@ class Block(PointModule):
         attn_drop=0.0,
         proj_drop=0.0,
         drop_path=0.0,
-        layer_scale=None,
         norm_layer=nn.LayerNorm,
         act_layer=nn.GELU,
         pre_norm=True,
@@ -301,11 +287,6 @@ class Block(PointModule):
         )
 
         self.norm1 = PointSequential(norm_layer(channels))
-        self.ls1 = PointSequential(
-            LayerScale(channels, init_values=layer_scale)
-            if layer_scale is not None
-            else nn.Identity()
-        )
         self.attn = SerializedAttention(
             channels=channels,
             patch_size=patch_size,
@@ -321,11 +302,6 @@ class Block(PointModule):
             upcast_softmax=upcast_softmax,
         )
         self.norm2 = PointSequential(norm_layer(channels))
-        self.ls2 = PointSequential(
-            LayerScale(channels, init_values=layer_scale)
-            if layer_scale is not None
-            else nn.Identity()
-        )
         self.mlp = PointSequential(
             MLP(
                 in_channels=channels,
@@ -346,7 +322,7 @@ class Block(PointModule):
         shortcut = point.feat
         if self.pre_norm:
             point = self.norm1(point)
-        point = self.drop_path(self.ls1(self.attn(point)))
+        point = self.drop_path(self.attn(point))
         point.feat = shortcut + point.feat
         if not self.pre_norm:
             point = self.norm1(point)
@@ -354,7 +330,7 @@ class Block(PointModule):
         shortcut = point.feat
         if self.pre_norm:
             point = self.norm2(point)
-        point = self.drop_path(self.ls2(self.mlp(point)))
+        point = self.drop_path(self.mlp(point))
         point.feat = shortcut + point.feat
         if not self.pre_norm:
             point = self.norm2(point)
@@ -362,7 +338,7 @@ class Block(PointModule):
         return point
 
 
-class GridPooling(PointModule):
+class SerializedPooling(PointModule):
     def __init__(
         self,
         in_channels,
@@ -378,6 +354,8 @@ class GridPooling(PointModule):
         self.in_channels = in_channels
         self.out_channels = out_channels
 
+        assert stride == 2 ** (math.ceil(stride) - 1).bit_length()  # 2, 4, 8
+        # TODO: add support to grid pool (any stride)
         self.stride = stride
         assert reduce in ["sum", "mean", "min", "max"]
         self.reduce = reduce
@@ -391,34 +369,49 @@ class GridPooling(PointModule):
             self.act = PointSequential(act_layer())
 
     def forward(self, point: Point):
-        if "grid_coord" in point.keys():
-            grid_coord = point.grid_coord
-        elif {"coord", "grid_size"}.issubset(point.keys()):
-            grid_coord = torch.div(
-                point.coord - point.coord.min(0)[0],
-                point.grid_size,
-                rounding_mode="trunc",
-            ).int()
-        else:
-            raise AssertionError(
-                "[gird_coord] or [coord, grid_size] should be include in the Point"
-            )
-        grid_coord = torch.div(grid_coord, self.stride, rounding_mode="trunc")
-        grid_coord = grid_coord | point.batch.view(-1, 1) << 48
-        grid_coord, cluster, counts = torch.unique(
-            grid_coord,
+        pooling_depth = (math.ceil(self.stride) - 1).bit_length()
+        if pooling_depth > point.serialized_depth:
+            pooling_depth = 0
+        assert {
+            "serialized_code",
+            "serialized_order",
+            "serialized_inverse",
+            "serialized_depth",
+        }.issubset(
+            point.keys()
+        ), "Run point.serialization() point cloud before SerializedPooling"
+
+        code = point.serialized_code >> pooling_depth * 3
+        code_, cluster, counts = torch.unique(
+            code[0],
             sorted=True,
             return_inverse=True,
             return_counts=True,
-            dim=0,
         )
-        grid_coord = grid_coord & ((1 << 48) - 1)
         # indices of point sorted by cluster, for torch_scatter.segment_csr
         _, indices = torch.sort(cluster)
         # index pointer for sorted point, for torch_scatter.segment_csr
         idx_ptr = torch.cat([counts.new_zeros(1), torch.cumsum(counts, dim=0)])
         # head_indices of each cluster, for reduce attr e.g. code, batch
         head_indices = indices[idx_ptr[:-1]]
+        # generate down code, order, inverse
+        code = code[:, head_indices]
+        order = torch.argsort(code)
+        inverse = torch.zeros_like(order).scatter_(
+            dim=1,
+            index=order,
+            src=torch.arange(0, code.shape[1], device=order.device).repeat(
+                code.shape[0], 1
+            ),
+        )
+
+        if self.shuffle_orders:
+            perm = torch.randperm(code.shape[0])
+            code = code[perm]
+            order = order[perm]
+            inverse = inverse[perm]
+
+        # collect information
         point_dict = Dict(
             feat=torch_scatter.segment_csr(
                 self.proj(point.feat)[indices], idx_ptr, reduce=self.reduce
@@ -426,43 +419,32 @@ class GridPooling(PointModule):
             coord=torch_scatter.segment_csr(
                 point.coord[indices], idx_ptr, reduce="mean"
             ),
-            grid_coord=grid_coord,
+            grid_coord=point.grid_coord[head_indices] >> pooling_depth,
+            serialized_code=code,
+            serialized_order=order,
+            serialized_inverse=inverse,
+            serialized_depth=point.serialized_depth - pooling_depth,
             batch=point.batch[head_indices],
         )
-        if "origin_coord" in point.keys():
-            point_dict["origin_coord"] = torch_scatter.segment_csr(
-                point.origin_coord[indices], idx_ptr, reduce="mean"
-            )
+
         if "condition" in point.keys():
             point_dict["condition"] = point.condition
         if "context" in point.keys():
             point_dict["context"] = point.context
-        if "name" in point.keys():
-            point_dict["name"] = point.name
-        if "split" in point.keys():
-            point_dict["split"] = point.split
-        if "color" in point.keys():
-            point_dict["color"] = torch_scatter.segment_csr(
-                point.color[indices], idx_ptr, reduce="mean"
-            )
-        if "grid_size" in point.keys():
-            point_dict["grid_size"] = point.grid_size * self.stride
 
         if self.traceable:
             point_dict["pooling_inverse"] = cluster
             point_dict["pooling_parent"] = point
-        order = point.order
         point = Point(point_dict)
         if self.norm is not None:
             point = self.norm(point)
         if self.act is not None:
             point = self.act(point)
-        point.serialization(order=order, shuffle_orders=self.shuffle_orders)
         point.sparsify()
         return point
 
 
-class GridUnpooling(PointModule):
+class SerializedUnpooling(PointModule):
     def __init__(
         self,
         in_channels,
@@ -490,15 +472,12 @@ class GridUnpooling(PointModule):
         assert "pooling_parent" in point.keys()
         assert "pooling_inverse" in point.keys()
         parent = point.pop("pooling_parent")
-        inverse = point.pooling_inverse
-        feat = point.feat
-
+        inverse = point.pop("pooling_inverse")
+        point = self.proj(point)
         parent = self.proj_skip(parent)
-        parent.feat = parent.feat + self.proj(point).feat[inverse]
-        parent.sparse_conv_feat = parent.sparse_conv_feat.replace_feature(parent.feat)
+        parent.feat = parent.feat + point.feat[inverse]
 
         if self.traceable:
-            point.feat = feat
             parent["unpooling_parent"] = point
         return parent
 
@@ -510,36 +489,182 @@ class Embedding(PointModule):
         embed_channels,
         norm_layer=None,
         act_layer=None,
-        mask_token=False,
     ):
         super().__init__()
         self.in_channels = in_channels
         self.embed_channels = embed_channels
 
-        self.stem = PointSequential(linear=nn.Linear(in_channels, embed_channels))
+        # TODO: check remove spconv
+        self.stem = PointSequential(
+            conv=spconv.SubMConv3d(
+                in_channels,
+                embed_channels,
+                kernel_size=5,
+                padding=1,
+                bias=False,
+                indice_key="stem",
+            )
+        )
         if norm_layer is not None:
             self.stem.add(norm_layer(embed_channels), name="norm")
         if act_layer is not None:
             self.stem.add(act_layer(), name="act")
 
-        if mask_token:
-            self.mask_token = nn.Parameter(torch.zeros(1, embed_channels))
-        else:
-            self.mask_token = None
-
     def forward(self, point: Point):
         point = self.stem(point)
-        if "mask" in point.keys():
-            point.feat = torch.where(
-                point.mask.unsqueeze(-1),
-                self.mask_token.to(point.feat.dtype),
-                point.feat,
-            )
         return point
 
+class BSBlock(PointModule): # PointModule을 상속받아 PointSequential 내에서 사용 가능하게 함
+    def __init__(
+        self,
+        in_channels: int, # PTv3 디코더 최종 출력 채널 (Config 상 64 예상)
+        semantic_out_channels: int, # 강화된 Semantic Feature 출력 채널 (Config 상 64 예상)
+        boundary_feature_channels: int = 128, # BFANet 논문의 classifier_feat/margin_feat 출력 채널 (128)
+        num_heads: int = 8, # Attention head 수 (BFANet 논문 참고)
+        dropout: list = [0.2, 0.2], # BFANet 논문 코드의 dropout 값
+        num_semantic_classes: int = 20,
+    ):
+        super().__init__()
+        self.in_channels = in_channels
+        self.semantic_out_channels = semantic_out_channels # 초기화는 하지만 직접적인 출력 채널은 아님
+        self.boundary_feature_channels = boundary_feature_channels
+        self.num_heads = num_heads
+        self.head_dim = self.boundary_feature_channels // self.num_heads 
+        self.scale = 1.0 
 
-@MODELS.register_module("PT-v3m2")
-class PointTransformerV3(PointModule):
+        # Corresponds to classifier_feat and margin_feat in BFANet_SegHeader
+        self.semantic_init_mlp = nn.Sequential(
+            nn.Linear(in_channels, boundary_feature_channels), # in_channels (64) -> 128
+            nn.BatchNorm1d(boundary_feature_channels),
+            nn.LeakyReLU()
+        )
+        self.boundary_init_mlp = nn.Sequential(
+            nn.Linear(in_channels, boundary_feature_channels), # in_channels (64) -> 128
+            nn.BatchNorm1d(boundary_feature_channels),
+            nn.LeakyReLU()
+        )
+
+        self.initial_semantic_head = nn.Sequential(
+            nn.Dropout(dropout[0]),
+            nn.Linear(boundary_feature_channels, 64), 
+            nn.BatchNorm1d(64),
+            nn.PReLU(),
+            nn.Dropout(dropout[1]),
+            nn.Linear(64, num_semantic_classes, bias=True) # out_channels (클래스 수)
+        )
+        self.initial_boundary_head = nn.Sequential(
+            nn.Dropout(dropout[0]),
+            nn.Linear(boundary_feature_channels, 64),
+            nn.BatchNorm1d(64),
+            nn.PReLU(),
+            nn.Dropout(dropout[1]),
+            nn.Linear(64, 1, bias=True) # 1 (이진 분류)
+        )
+
+        # Corresponding to sem_qkv and margin_qkv in BFANet_SegHeader
+        self.sem_qkv = nn.Sequential(
+            nn.Linear(boundary_feature_channels, boundary_feature_channels * 3), 
+            nn.BatchNorm1d(boundary_feature_channels * 3),
+            nn.LeakyReLU()
+        )
+        self.margin_qkv = nn.Sequential(
+            nn.Linear(boundary_feature_channels, boundary_feature_channels * 3), 
+            nn.BatchNorm1d(boundary_feature_channels * 3),
+            nn.LeakyReLU()
+        )
+        # Corresponding to fusion_q in BFANet_SegHeader
+        # input: (N, 2 * boundary_feature_channels) = (N, 256)
+        # output: (N, boundary_feature_channels) = (N, 128)
+        self.fusion_q = nn.Sequential(
+            nn.Linear(boundary_feature_channels * 2, boundary_feature_channels * 2), # 256 -> 256
+            nn.BatchNorm1d(boundary_feature_channels * 2),
+            nn.LeakyReLU(),
+            nn.Linear(boundary_feature_channels * 2, boundary_feature_channels), # 256 -> 128
+            nn.BatchNorm1d(boundary_feature_channels),
+            nn.LeakyReLU(),
+        )
+
+        self.attn_drop = nn.Dropout(0.0) # BFANet 코드와 동일
+        self.softmax = nn.Softmax(dim=-1)
+
+        # Boundary Prediction Head
+        # Takes `margin_out_fused` (N, 128) and outputs (N, 1) probability
+        self.final_semantic_head = nn.Sequential(
+            nn.Dropout(dropout[0]),
+            nn.Linear(boundary_feature_channels, 64), 
+            nn.BatchNorm1d(64),
+            nn.PReLU(),
+            nn.Dropout(dropout[1]),
+            nn.Linear(64, num_semantic_classes, bias=True) # out_channels (클래스 수)
+        )
+        self.final_boundary_head = nn.Sequential(
+            nn.Dropout(dropout[0]),
+            nn.Linear(boundary_feature_channels, 64), 
+            nn.BatchNorm1d(64),
+            nn.PReLU(),
+            nn.Dropout(dropout[1]),
+            nn.Linear(64, 1, bias=True) # 1 (이진 분류)
+        )
+
+
+    def forward(self, point: Point):
+        # f_o: PTv3 디코더의 최종 출력 feature (N, in_channels)
+        fo = point.feat 
+
+        # 1. Decouple initial semantic and boundary features
+        sem_out_init = self.semantic_init_mlp(fo)
+        margin_out_init = self.boundary_init_mlp(fo)
+
+        initial_sem_logits = self.initial_semantic_head(sem_out_init)
+        initial_bou_logits = self.initial_boundary_head(margin_out_init)
+
+        # 2. Generate QKV for Attention
+        qkv_s_raw = self.sem_qkv(sem_out_init)
+        qkv_m_raw = self.margin_qkv(margin_out_init)
+
+        # Split into Q, K, V (each N, boundary_feature_channels)
+        q_s, k_s, v_s = torch.chunk(qkv_s_raw, 3, dim=-1)
+        q_m, k_m, v_m = torch.chunk(qkv_m_raw, 3, dim=-1)
+
+        # 3. Fuse Queries (following BFANet Eq 6: Ct(Qb, Qs) -> Mf1)
+        fused_query = self.fusion_q(torch.cat((q_s, q_m), dim=-1))
+
+        # 4. Reshape for Multi-Head Attention Calculation (K=1, single token per point)
+        q_all_for_attn = fused_query.view(fo.shape[0], self.num_heads, 1, self.head_dim)
+        k_s_for_attn = k_s.view(fo.shape[0], self.num_heads, 1, self.head_dim)
+        v_s_for_attn = v_s.view(fo.shape[0], self.num_heads, 1, self.head_dim)
+        k_m_for_attn = k_m.view(fo.shape[0], self.num_heads, 1, self.head_dim)
+        v_m_for_attn = v_m.view(fo.shape[0], self.num_heads, 1, self.head_dim)
+        
+        # 5. Perform Attention for Semantic Features (Eq 6)
+        attn_sem = q_all_for_attn @ k_s_for_attn.transpose(-2, -1) * self.scale
+        attn_sem = self.softmax(attn_sem)
+        attn_sem = self.attn_drop(attn_sem)
+        
+        sem_out_fused = (attn_sem @ v_s_for_attn).view(fo.shape[0], -1) 
+        
+        # 6. Perform Attention for Boundary Features
+        attn_bou = q_all_for_attn @ k_m_for_attn.transpose(-2, -1) * self.scale
+        attn_bou = self.softmax(attn_bou)
+        attn_bou = self.attn_drop(attn_bou)
+        
+        margin_out_fused = (attn_bou @ v_m_for_attn).view(fo.shape[0], -1)
+
+        # 7. Final Boundary Prediction Logits
+        final_sem_logits = self.final_semantic_head(sem_out_fused)
+        final_bou_logits = self.final_boundary_head(margin_out_fused)
+
+        # Update Point object: point.feat for semantic head, and add boundary_pred_logits
+        point.initial_semantic_logits = initial_sem_logits
+        point.initial_boundary_logits = initial_bou_logits
+        point.final_semantic_logits = final_sem_logits
+        point.final_boundary_logits = final_bou_logits
+
+        return point 
+
+
+@MODELS.register_module("PT-v3m4")
+class PointTransformerV3BSBlock(PointModule):
     def __init__(
         self,
         in_channels=6,
@@ -559,46 +684,70 @@ class PointTransformerV3(PointModule):
         attn_drop=0.0,
         proj_drop=0.0,
         drop_path=0.3,
-        layer_scale=None,
         pre_norm=True,
         shuffle_orders=True,
         enable_rpe=False,
         enable_flash=True,
         upcast_attention=False,
         upcast_softmax=False,
-        traceable=False,
-        mask_token=False,
-        enc_mode=False,
-        freeze_encoder=False,
+        cls_mode=False,
+        pdnorm_bn=False,
+        pdnorm_ln=False,
+        pdnorm_decouple=True,
+        pdnorm_adaptive=False,
+        pdnorm_affine=True,
+        pdnorm_conditions=("ScanNet", "S3DIS", "Structured3D"),
+
+        # BFANet BSBlock 관련 파라미터 추가
+        bsblock_cfg=None, 
     ):
         super().__init__()
         self.num_stages = len(enc_depths)
         self.order = [order] if isinstance(order, str) else order
+        self.cls_mode = cls_mode
         self.shuffle_orders = shuffle_orders
-        self.enc_mode = enc_mode
-        self.freeze_encoder = freeze_encoder
 
         assert self.num_stages == len(stride) + 1
         assert self.num_stages == len(enc_depths)
         assert self.num_stages == len(enc_channels)
         assert self.num_stages == len(enc_num_head)
         assert self.num_stages == len(enc_patch_size)
-        assert self.enc_mode or self.num_stages == len(dec_depths) + 1
-        assert self.enc_mode or self.num_stages == len(dec_channels) + 1
-        assert self.enc_mode or self.num_stages == len(dec_num_head) + 1
-        assert self.enc_mode or self.num_stages == len(dec_patch_size) + 1
+        assert self.cls_mode or self.num_stages == len(dec_depths) + 1
+        assert self.cls_mode or self.num_stages == len(dec_channels) + 1
+        assert self.cls_mode or self.num_stages == len(dec_num_head) + 1
+        assert self.cls_mode or self.num_stages == len(dec_patch_size) + 1
 
-        # normalization layer
-        ln_layer = nn.LayerNorm
+        # norm layers
+        if pdnorm_bn:
+            bn_layer = partial(
+                PDNorm,
+                norm_layer=partial(
+                    nn.BatchNorm1d, eps=1e-3, momentum=0.01, affine=pdnorm_affine
+                ),
+                conditions=pdnorm_conditions,
+                decouple=pdnorm_decouple,
+                adaptive=pdnorm_adaptive,
+            )
+        else:
+            bn_layer = partial(nn.BatchNorm1d, eps=1e-3, momentum=0.01)
+        if pdnorm_ln:
+            ln_layer = partial(
+                PDNorm,
+                norm_layer=partial(nn.LayerNorm, elementwise_affine=pdnorm_affine),
+                conditions=pdnorm_conditions,
+                decouple=pdnorm_decouple,
+                adaptive=pdnorm_adaptive,
+            )
+        else:
+            ln_layer = nn.LayerNorm
         # activation layers
         act_layer = nn.GELU
 
         self.embedding = Embedding(
             in_channels=in_channels,
             embed_channels=enc_channels[0],
-            norm_layer=ln_layer,
+            norm_layer=bn_layer,
             act_layer=act_layer,
-            mask_token=mask_token,
         )
 
         # encoder
@@ -613,11 +762,11 @@ class PointTransformerV3(PointModule):
             enc = PointSequential()
             if s > 0:
                 enc.add(
-                    GridPooling(
+                    SerializedPooling(
                         in_channels=enc_channels[s - 1],
                         out_channels=enc_channels[s],
                         stride=stride[s - 1],
-                        norm_layer=ln_layer,
+                        norm_layer=bn_layer,
                         act_layer=act_layer,
                     ),
                     name="down",
@@ -634,7 +783,6 @@ class PointTransformerV3(PointModule):
                         attn_drop=attn_drop,
                         proj_drop=proj_drop,
                         drop_path=enc_drop_path_[i],
-                        layer_scale=layer_scale,
                         norm_layer=ln_layer,
                         act_layer=act_layer,
                         pre_norm=pre_norm,
@@ -651,7 +799,7 @@ class PointTransformerV3(PointModule):
                 self.enc.add(module=enc, name=f"enc{s}")
 
         # decoder
-        if not self.enc_mode:
+        if not self.cls_mode:
             dec_drop_path = [
                 x.item() for x in torch.linspace(0, drop_path, sum(dec_depths))
             ]
@@ -664,13 +812,12 @@ class PointTransformerV3(PointModule):
                 dec_drop_path_.reverse()
                 dec = PointSequential()
                 dec.add(
-                    GridUnpooling(
+                    SerializedUnpooling(
                         in_channels=dec_channels[s + 1],
                         skip_channels=enc_channels[s],
                         out_channels=dec_channels[s],
-                        norm_layer=ln_layer,
+                        norm_layer=bn_layer,
                         act_layer=act_layer,
-                        traceable=traceable,
                     ),
                     name="up",
                 )
@@ -686,7 +833,6 @@ class PointTransformerV3(PointModule):
                             attn_drop=attn_drop,
                             proj_drop=proj_drop,
                             drop_path=dec_drop_path_[i],
-                            layer_scale=layer_scale,
                             norm_layer=ln_layer,
                             act_layer=act_layer,
                             pre_norm=pre_norm,
@@ -700,33 +846,32 @@ class PointTransformerV3(PointModule):
                         name=f"block{i}",
                     )
                 self.dec.add(module=dec, name=f"dec{s}")
-        if self.freeze_encoder:
-            for p in self.embedding.parameters():
-                p.requires_grad = False
-            for p in self.enc.parameters():
-                p.requires_grad = False
-        self.apply(self._init_weights)
-
-    @staticmethod
-    def _init_weights(module):
-        if isinstance(module, nn.Linear):
-            trunc_normal_(module.weight, std=0.02)
-            if module.bias is not None:
-                nn.init.zeros_(module.bias)
-        elif isinstance(module, spconv.SubMConv3d):
-            trunc_normal_(module.weight, std=0.02)
-            if module.bias is not None:
-                nn.init.zeros_(module.bias)
+        # BFANet BSBlock 초기화
+        self.bfanet_block = None
+        if bsblock_cfg is not None:
+            self.bfanet_block = BSBlock(**bsblock_cfg)
 
     def forward(self, data_dict):
         point = Point(data_dict)
-        point = self.embedding(point)
-
         point.serialization(order=self.order, shuffle_orders=self.shuffle_orders)
         point.sparsify()
 
-        point.encoder_features = point.feat 
+        point = self.embedding(point)
         point = self.enc(point)
-        if not self.enc_mode:
+        point.encoder_features = point.feat
+        
+        if not self.cls_mode:
             point = self.dec(point)
+        # else:
+        #     point.feat = torch_scatter.segment_csr(
+        #         src=point.feat,
+        #         indptr=nn.functional.pad(point.offset, (1, 0)),
+        #         reduce="mean",
+        #     )
+
+        # BFANet BSBlock 적용
+        if self.bfanet_block is not None: # BSBlock이 초기화된 경우에만 적용
+            point = self.bfanet_block(point) # point.feat와 point.boundary_pred_logits가 업데이트됨
+
         return point
+

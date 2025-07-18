@@ -1,5 +1,5 @@
 from .builder import build_model
-from .default import DefaultSegmentor, DefaultClassifier, SegmentorBS
+from .default import DefaultSegmentor, DefaultClassifier, SegmentorBS, SegmentorDistill
 from .modules import PointModule, PointModel
 
 # Backbones

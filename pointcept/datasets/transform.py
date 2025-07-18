@@ -32,8 +32,8 @@ def index_operator(data_dict, index, duplicate=False):
             "strength",
             "segment",
             "instance",
-            "features",
-            "boundary"
+           "features",
+           "boundary"
         ]
     if not duplicate:
         for key in data_dict["index_valid_keys"]:
@@ -75,7 +75,6 @@ class Collect(object):
             assert isinstance(keys, Sequence)
             data[name] = torch.cat([data_dict[key].float() for key in keys], dim=1)
         return data
-
 
 @TRANSFORMS.register_module()
 class Copy(object):
@@ -1031,7 +1030,7 @@ class MultiViewGenerator(object):
         max_size=65536,
         center_height_scale=(0, 1),
         shared_global_view=False,
-        view_keys=("coord", "origin_coord", "color", "normal"),
+        view_keys=("coord", "origin_coord", "color", "features"),
     ):
         self.global_view_num = global_view_num
         self.global_view_scale = global_view_scale

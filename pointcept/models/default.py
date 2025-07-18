@@ -3,11 +3,11 @@ import torch.nn as nn
 import torch_scatter
 import torch_cluster
 
-from pointcept.models.losses import build_criteria, build_criteria_bs
+from pointcept.models.losses import build_criteria, build_criteria_bs, build_criteria_distil
 from pointcept.models.utils.structure import Point
 from pointcept.models.utils import offset2batch
 from .builder import MODELS, build_model
-
+from pointcept.models.utils import load_checkpoint
 
 @MODELS.register_module()
 class DefaultSegmentor(nn.Module):
@@ -296,5 +296,185 @@ class SegmentorBS(nn.Module): # DefaultSegmentorV2를 대체할 새로운 클래
             # 예측 결과는 항상 반환 (평가 및 테스트 모드)
             return_dict["seg_logits"] = point.final_semantic_logits 
             return_dict["boundary_logits"] = point.final_boundary_logits 
+
+        return return_dict
+    
+@MODELS.register_module()
+class SegmentorDistill(nn.Module):
+    def __init__(self,
+                 backbone,              # Student 백본 config (PT-v3)
+                 teacher_backbone,      # Teacher 백본 config (사전 학습된 PT-v3)
+                 mlp_bridge,            # MLP 브릿지 config
+                 criteria,              # 분할 Loss + 증류 Loss config 리스트
+                 num_classes,
+                 backbone_out_channels,
+                 freeze_backbone=False):
+        super().__init__()
+        
+        # 1. Student 모델 초기화 (DefaultSegmentorV2와 동일)
+        self.backbone = build_model(backbone)
+        self.seg_head = nn.Linear(backbone_out_channels, num_classes)
+        
+        
+        # 2. Teacher 모델 초기화
+        teacher_backbone_cfg = teacher_backbone.copy()
+        checkpoint_path = teacher_backbone_cfg.pop("checkpoint_path", None)
+        
+        self.teacher_backbone = build_model(teacher_backbone_cfg)
+        
+        if checkpoint_path:
+            load_checkpoint(self.teacher_backbone, checkpoint_path, map_location="cpu")
+        self.teacher_backbone.eval()
+        for p in self.teacher_backbone.parameters():
+            p.requires_grad = False
+            
+        # 3. MLP 브릿지 초기화
+        self.mlp_bridge = nn.Sequential(
+            nn.Linear(mlp_bridge["in_channels"], mlp_bridge["hidden_channels"]),
+            nn.ReLU(inplace=True),
+            nn.Linear(mlp_bridge["hidden_channels"], mlp_bridge["out_channels"])
+        )
+
+        self.criteria = build_criteria_distil(criteria)
+
+    def forward(self, input_dict):
+        # 1. Student 경로 실행
+        point_student = Point(input_dict)
+        point_student, student_feature_for_distill = self.backbone(point_student)
+        
+        if isinstance(point_student, Point):
+            while "pooling_parent" in point_student.keys():
+                assert "pooling_inverse" in point_student.keys()
+                parent = point_student.pop("pooling_parent")
+                inverse = point_student.pop("pooling_inverse")
+                parent.feat = torch.cat([parent.feat, point_student.feat[inverse]], dim=-1)
+                point_student = parent
+            feat_for_seg = point_student.feat
+        else:
+            feat_for_seg = point_student # should not happen
+
+        seg_logits = self.seg_head(feat_for_seg)
+        
+        # 2. Teacher 경로 실행 (그래디언트 계산 없이)
+        with torch.no_grad():
+            teacher_input_dict = {
+                "coord": input_dict["coord"],
+                "grid_coord": input_dict["grid_coord"],
+                "offset": input_dict["offset"],
+                "feat": input_dict["feat_teacher"],
+                "scene_name": input_dict.get("scene_name")
+            }
+            point_teacher = Point(teacher_input_dict)
+            point_teacher.serialization(order=self.teacher_backbone.order, shuffle_orders=self.teacher_backbone.shuffle_orders)
+            point_teacher.sparsify()
+            point_teacher = self.teacher_backbone.embedding(point_teacher)
+            point_teacher = self.teacher_backbone.enc(point_teacher) # 인코더까지만 실행
+            teacher_feature_for_distill = point_teacher.feat
+        
+        # 3. 특징 증류
+        student_feature_bridged = self.mlp_bridge(student_feature_for_distill)
+        
+        # 4. 손실 계산 및 반환
+        return_dict = {}
+        if self.training:
+            total_semantic_loss, distil_loss = self.criteria(
+                seg_logits=seg_logits,
+                student_feature_bridged=student_feature_bridged,
+                teacher_feature=teacher_feature_for_distill,
+                gt_semantic_label=input_dict["segment"]
+            )
+            
+            return_dict["loss_seg"] = total_semantic_loss
+            return_dict["loss_distill"] = distil_loss
+            return_dict["loss"] = total_semantic_loss + distil_loss
+        
+        else: # 평가/테스트 모드
+            if "segment" in input_dict:
+                total_semantic_loss, _ = self.criteria(
+                    seg_logits=seg_logits,
+                    student_feature_bridged=None,
+                    teacher_feature=None,
+                    gt_semantic_label=input_dict["segment"]
+                )
+                
+                return_dict["loss"] = total_semantic_loss
+            return_dict["seg_logits"] = seg_logits
+            
+        return return_dict
+
+
+@MODELS.register_module()
+class SegmentorBSDistill(nn.Module): # DefaultSegmentorV2를 대체할 새로운 클래스
+    def __init__(
+        self,
+        num_classes,
+        backbone=None,
+        mlp_bridge=None, # Distillation을 위한 MLP Bridge
+        teacher_backbone=None, # Distillation을 위한 Teacher Backbone
+        criteria=None, # 이제 BoundarySemanticLoss의 Config를 받게 됨.
+        freeze_backbone=False,
+    ):
+        super().__init__()
+        self.seg_head = nn.Identity() 
+        self.backbone = build_model(backbone)
+        self.teacher_backbone = build_model(teacher_backbone)
+        self.criteria = build_criteria_bs(criteria) # BoundarySemanticLoss 인스턴스가 빌드됨.
+        checkpoint_path = teacher_backbone.get("checkpoint_path", None)
+        if checkpoint_path:
+            load_checkpoint(self.teacher_backbone, checkpoint_path, map_location="cpu")
+        # Teacher는 학습되지 않도록 설정
+        self.teacher_backbone.eval()
+        for p in self.teacher_backbone.parameters():
+            p.requires_grad = False
+
+    def forward(self, input_dict):
+        # 1. Student 경로 실행
+        point = Point(input_dict)
+        point_student = self.backbone(point)
+        # 1단계 수정으로 추가된 인코더 특징을 가져옵니다.
+        student_feature_for_distill = point_student.encoder_features
+
+
+        
+        # 2. Teacher 경로 실행 (그래디언트 계산 없이)
+        with torch.no_grad():
+            # 데이터 로더는 Student와 Teacher용 특징을 모두 input_dict에 담아줘야 합니다.
+            # 예: input_dict['feat_teacher'] = torch.cat([input_dict['color'], input_dict['opacity']], dim=1)
+            teacher_input_dict = {
+                "coord": input_dict["coord"],
+                "grid_coord": input_dict["grid_coord"],
+                "offset": input_dict["offset"],
+                "feat": input_dict["feat_teacher"],
+                "scene_name": input_dict["scene_name"] # PDNorm 등에 필요할 수 있음
+            }
+            
+            # Teacher 백본은 인코더만 실행합니다.
+            point_teacher = Point(teacher_input_dict)
+            point_teacher.serialization(order=self.teacher_backbone.order, 
+                                        shuffle_orders=self.teacher_backbone.shuffle_orders)
+            point_teacher.sparsify()
+            point_teacher = self.teacher_backbone.embedding(point_teacher)
+            teacher_feature_for_distill = self.teacher_backbone.enc(point_teacher).feat
+
+        # 3. 특징 증류
+        student_feature_bridged = self.mlp_bridge(student_feature_for_distill)
+
+        # 4. 손실 계산 및 반환
+        return_dict = {}
+        if self.training:
+            loss_main_dict = self.criteria[0](point_student) # Point 객체를 직접 전달
+            return_dict.update(loss_main_dict)
+
+            loss_distill_dict = self.criteria[1](
+                student_feature_bridged, 
+                teacher_feature_for_distill
+            )
+            return_dict.update(loss_distill_dict)
+            
+            return_dict["loss"] = loss_main_dict["loss"] + loss_distill_dict["loss_distill"]
+        
+        else: # 평가 모드
+            return_dict["seg_logits"] = point_student.final_semantic_logits
+            return_dict["boundary_logits"] = point_student.final_boundary_logits
 
         return return_dict

@@ -319,7 +319,6 @@ class BoundarySemanticLoss(nn.Module):
         
         total_loss_final_boundary = loss_final_bou_bce + loss_final_bou_dice
 
-        # 모든 Loss들을 합산합니다.
         # 각 Loss 유형에 Config에서 받은 가중치 (semantic_loss_weight, boundary_loss_weight)를 곱합니다.
         # BFANet 원본은 총 8개 Loss를 단순히 더합니다. 여기서는 BFANet 논문의 L_sem, L_bou를 가중 합산하는 방식으로 통합합니다.
         # 논문 Loss 식 (4.5절) L = L_sem + L_bou
@@ -341,3 +340,24 @@ class BoundarySemanticLoss(nn.Module):
         }
         
         return losses
+    
+
+@LOSSES.register_module()
+class FeatureDistillationLoss(nn.Module):
+    def __init__(self,
+                 loss_weight=1.0,
+                 loss_type="L2"):
+        super().__init__()
+        self.loss_weight = loss_weight
+        assert loss_type in ["L2", "CosineSimilarity"], "loss_type must be L2 or CosineSimilarity"
+        self.loss_type = loss_type
+
+    def forward(self, student_feat, teacher_feat):
+        if self.loss_type == "L2":
+            loss = F.mse_loss(student_feat, teacher_feat)
+        elif self.loss_type == "CosineSimilarity":
+            # 코사인 유사도는 -1 ~ 1 사이 값이므로, (1 - 유사도)를 손실로 사용
+            loss = 1 - F.cosine_similarity(student_feat, teacher_feat, dim=-1).mean()
+        
+        # 최종 손실 딕셔너리 반환
+        return loss * self.loss_weight

@@ -9,19 +9,6 @@ enable_amp = True
 enable_wandb = False
 seed = 43244662
 
-features_flag = ["scale"]
-
-# === 동적으로 in_channels 계산 시작 ===
-_base_input_channels = 6 # color(3) + normal(3)
-_custom_features_dim = 0
-if "scale" in features_flag:
-    _custom_features_dim += 3
-if "opacity" in features_flag:
-    _custom_features_dim += 1
-if "rotation" in features_flag:
-    _custom_features_dim += 4
-_total_input_channels = _base_input_channels + _custom_features_dim
-print(f"Total input channels: {_total_input_channels} (Base: {_base_input_channels}, Custom: {_custom_features_dim})")
 # model settings
 model = dict(
     type="DefaultSegmentorV2",
@@ -29,7 +16,7 @@ model = dict(
     backbone_out_channels=64,
     backbone=dict(
         type="PT-v3m1",
-        in_channels=_total_input_channels,
+        in_channels=6,
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(2, 2, 2, 2),
         enc_depths=(2, 2, 2, 6, 2),
@@ -83,7 +70,7 @@ param_dicts = [dict(keyword="block", lr=0.0006)]
 dataset_type = "ScanNetDatasetBoundary"
 data_root = "data/scannet"
 features_root = "data/features/base_3dgs"
-
+features_flag = []
 
 data = dict(
     num_classes=20,

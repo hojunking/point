@@ -703,6 +703,10 @@ class PointTransformerV3(PointModule):
 
         point = self.embedding(point)
         point = self.enc(point)
+        
+        encoder_features_tensor  = point.feat
+        
+
         if not self.cls_mode:
             point = self.dec(point)
         # else:
@@ -711,4 +715,4 @@ class PointTransformerV3(PointModule):
         #         indptr=nn.functional.pad(point.offset, (1, 0)),
         #         reduce="mean",
         #     )
-        return point
+        return point, encoder_features_tensor 

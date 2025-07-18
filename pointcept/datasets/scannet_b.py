@@ -76,7 +76,6 @@ class ScanNetDatasetBoundary(ScanNetDataset):
                 
                 selected_features_list = []
                 current_feature_idx_in_npy = 0 # features.npy 내 현재 특징의 시작 인덱스 (3DGS 순서)
-
                 if "scale" in self.features_flag:
                     selected_features_list.append(all_features_3dgs[:, current_feature_idx_in_npy : current_feature_idx_in_npy + 3])
                 current_feature_idx_in_npy += 3
@@ -88,7 +87,7 @@ class ScanNetDatasetBoundary(ScanNetDataset):
                 if "rotation" in self.features_flag:
                     selected_features_list.append(all_features_3dgs[:, current_feature_idx_in_npy : current_feature_idx_in_npy + 4])
                 current_feature_idx_in_npy += 4 
-
+                
                 if selected_features_list:
                     # 기존 data_dict["features"]를 덮어씁니다.
                     data_dict["features"] = np.concatenate(selected_features_list, axis=-1)
