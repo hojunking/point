@@ -659,7 +659,7 @@ class BSBlock(PointModule): # PointModule을 상속받아 PointSequential 내에
         point.initial_boundary_logits = initial_bou_logits
         point.final_semantic_logits = final_sem_logits
         point.final_boundary_logits = final_bou_logits
-
+        
         return point 
 
 
@@ -858,6 +858,9 @@ class PointTransformerV3BSBlock(PointModule):
 
         point = self.embedding(point)
         point = self.enc(point)
+
+        encoder_features_tensor  = point.feat
+
         if not self.cls_mode:
             point = self.dec(point)
         # else:
@@ -871,5 +874,5 @@ class PointTransformerV3BSBlock(PointModule):
         if self.bfanet_block is not None: # BSBlock이 초기화된 경우에만 적용
             point = self.bfanet_block(point) # point.feat와 point.boundary_pred_logits가 업데이트됨
 
-        return point
+        return point, encoder_features_tensor
 

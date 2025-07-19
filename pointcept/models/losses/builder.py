@@ -71,6 +71,42 @@ class Criteria_distil(object):
             distill_loss = 0.0
             
         return total_semantic_loss, distill_loss # 최종 합산된 스칼라 손실 값만 반환
+    
+class Criteria_bs_distil(object):
+    def __init__(self, cfg=None):
+        self.cfg = cfg if cfg is not None else []
+        self.criteria = []
+        # config에 정의된 모든 loss들을 빌드합니다.
+        for loss_cfg in self.cfg:
+            self.criteria.append(LOSSES.build(cfg=loss_cfg))
+    
+    def __call__(self,
+                 point_student,          # [수정] Point 객체를 직접 받음
+                 student_feature_bridged,
+                 teacher_feature,
+                 input_dict):            # gt_label을 포함한 dict
+        
+        # [수정] Point 객체에서 직접 필요한 logits과 GT label을 꺼내서 사용
+        bs_loss_dict = self.criteria[0](
+            initial_sem_logits=point_student.initial_semantic_logits, 
+            initial_bou_logits=point_student.initial_boundary_logits, 
+            final_sem_logits=point_student.final_semantic_logits, 
+            final_bou_logits=point_student.final_boundary_logits,
+            gt_semantic_label=input_dict["segment"], 
+            gt_boundary_label=input_dict["boundary"]
+        )
+        
+        if student_feature_bridged is not None and teacher_feature is not None:
+            distill_loss = self.criteria[1](student_feature_bridged, teacher_feature)
+        else:
+            distill_loss = 0.0
+
+        # 최종 손실 딕셔너리 구성
+        final_loss = bs_loss_dict
+        final_loss['loss_distill'] = distill_loss
+        final_loss['loss'] = bs_loss_dict['loss'] + distill_loss
+        return final_loss
+    
   
 def build_criteria(cfg):
     return Criteria(cfg)
@@ -80,3 +116,6 @@ def build_criteria_bs(cfg):
 
 def build_criteria_distil(cfg):
     return Criteria_distil(cfg)
+
+def build_criteria_bs_distil(cfg):
+    return Criteria_bs_distil(cfg)

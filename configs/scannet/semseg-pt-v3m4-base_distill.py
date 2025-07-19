@@ -88,17 +88,13 @@ model = dict(
         dict(type="LovaszLoss", mode="multiclass", loss_weight=1.0, ignore_index=-1),
         
         # 보조 증류 손실
-        dict(
-            type="FeatureDistillationLoss",
-            loss_weight=0.1,  # 람다(λ) 값
-            loss_type="L2"
-            # CosineSimilarity
-        )
+        dict(type="FeatureDistillationLoss", loss_weight=0.0, loss_type="L2")
+            # CosineSimilarity L2
     ],
 )
 
 # scheduler settings
-epoch = 800
+epoch = 1
 #optimizer = dict(type="AdamW", lr=0.006, weight_decay=0.05)
 optimizer = dict(type="AdamW", lr=0.006, weight_decay=0.05)
 scheduler = dict(
@@ -244,7 +240,7 @@ data = dict(
                 dict(type="ToTensor"),
                 dict(
                     type="Collect",
-                    keys=("coord", "grid_coord", "segment"),
+                    keys=("coord", "grid_coord", "index"),
                     #feat_keys=("color", "normal"),
                     feat_keys=("color", "normal"),
                     feat_teacher_keys=("color", "features")
@@ -372,3 +368,19 @@ data = dict(
         ),
     ),
 )
+
+hooks = [
+    # --- 필수적인 기본 Hook들 ---
+    dict(type="CheckpointLoader"),
+    dict(type="ModelHook"),
+    dict(type="IterationTimer", warmup_iter=2),
+    dict(type="InformationWriter"),
+    dict(type="SemSegEvaluator"),          # 학습 중 검증(validation) 담당
+    dict(type="CheckpointSaver", save_freq=None),
+    dict(type="PreciseEvaluator", test_last=False), # [핵심] 학습 후 최종 테스트(test) 담당
+    
+    # --- 우리가 추가한 커스텀 Hook ---
+    dict(type="DistillationSchedulerHook",
+         start_epoch=400, 
+         distill_loss_weight=0.1)
+]
