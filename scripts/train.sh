@@ -103,7 +103,7 @@ if [ "${WEIGHT}" = "None" ]; then
     --num-machines "$NUM_MACHINE" \
     --machine-rank ${SLURM_NODEID:-0} \
     --dist-url ${DIST_URL} \
-    --options save_path="$EXP_DIR" #$EXTRA_OPTIONS boundary_root="$BOUNDARY_ROOT" data.train.boundary_root="$BOUNDARY_ROOT" data.val.boundary_root="$BOUNDARY_ROOT" data.test.boundary_root="$BOUNDARY_ROOT" 
+    --options save_path="$EXP_DIR" $EXTRA_OPTIONS data.train.boundary_root="$BOUNDARY_ROOT" data.val.boundary_root="$BOUNDARY_ROOT" data.test.boundary_root="$BOUNDARY_ROOT"  #boundary_root="$BOUNDARY_ROOT" 
 else
     $PYTHON "$CODE_DIR"/tools/$TRAIN_CODE \
     --config-file "$CONFIG_DIR" \
@@ -111,5 +111,5 @@ else
     --num-machines "$NUM_MACHINE" \
     --machine-rank ${SLURM_NODEID:-0} \
     --dist-url ${DIST_URL} \
-    --options save_path="$EXP_DIR" resume="$RESUME" weight="$WEIGHT" data.train.data_root="$DATA_ROOT" data.val.data_root="$DATA_ROOT" data.test.data_root="$DATA_ROOT" $EXTRA_OPTIONS
+    --options save_path="$EXP_DIR" resume="$RESUME" weight="$WEIGHT" $EXTRA_OPTIONS data.train.boundary_root="$BOUNDARY_ROOT" data.val.boundary_root="$BOUNDARY_ROOT" data.test.boundary_root="$BOUNDARY_ROOT" 
 fi

@@ -2,13 +2,15 @@
 
 # Boundary roots (data subset)
 BOUNDARY_ROOTS=(
-  "data/boundary/scenesplats_scale03_bfa004"
+  #"data/boundary/scenesplats_scale03_bfa004"
+  "data/boundary/scenesplats_scale05_bfa004"
+  "data/boundary/scenesplats_scale07_bfa004"
 )
 
 for BOUNDARY_ROOT in "${BOUNDARY_ROOTS[@]}"; do
     
   # 실험 이름 설정
-  EXP_NAME="ptv3-$(basename "$BOUNDARY_ROOT")-samples100_bs-distill"
+  EXP_NAME="ptv3-$(basename "$BOUNDARY_ROOT")-samples100_bs-distill-50"
 
   # train.sh가 사용할 수 있도록 BOUNDARY_ROOT도 환경 변수로 내보내기
   export BOUNDARY_ROOT="$BOUNDARY_ROOT"
@@ -23,7 +25,7 @@ for BOUNDARY_ROOT in "${BOUNDARY_ROOTS[@]}"; do
     -g 1 \
     -d scannet \
     -n "$EXP_NAME" \
-    -r false \
+    -r true \
     -c semseg-pt-v3m5-bs_distill
 
   # 로그 분석 및 결과 저장
