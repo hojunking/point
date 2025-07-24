@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .builder import LOSSES
-
+from .lovasz import LovaszLoss
 
 @LOSSES.register_module()
 class CrossEntropyLoss(nn.Module):
@@ -319,12 +319,6 @@ class BoundarySemanticLoss(nn.Module):
         
         total_loss_final_boundary = loss_final_bou_bce + loss_final_bou_dice
 
-        # 각 Loss 유형에 Config에서 받은 가중치 (semantic_loss_weight, boundary_loss_weight)를 곱합니다.
-        # BFANet 원본은 총 8개 Loss를 단순히 더합니다. 여기서는 BFANet 논문의 L_sem, L_bou를 가중 합산하는 방식으로 통합합니다.
-        # 논문 Loss 식 (4.5절) L = L_sem + L_bou
-        # L_sem = (CE + Dice), L_bou = (BCE + Dice)
-        # BFANet_SegHeader는 v1과 v2 Loss를 각각 계산 후 모두 더합니다.
-        # 즉, L = (L_sem_v1 + L_bou_v1) + (L_sem_v2 + L_bou_v2)
         total_loss = (total_loss_initial_semantic * self.semantic_loss_weight +
                       total_loss_initial_boundary * self.boundary_loss_weight +
                       total_loss_final_semantic * self.semantic_loss_weight + # v2 Loss에 동일 가중치 적용
@@ -361,3 +355,98 @@ class FeatureDistillationLoss(nn.Module):
         
         # 최종 손실 딕셔너리 반환
         return loss * self.loss_weight
+
+@LOSSES.register_module()
+class BSLossWithLovasz(nn.Module):
+    """
+    Boundary-Semantic Loss with Lovasz-Softmax.
+    - Semantic Loss: CrossEntropy + Lovasz-Softmax
+    - Boundary Loss: Binary CrossEntropy + Binary Dice
+    """
+    def __init__(self, 
+                 semantic_loss_weight=1.0, 
+                 boundary_loss_weight=1.0,
+                 lovasz_loss_weight=1.0, # Lovasz 손실에 대한 별도 가중치
+                 ignore_index=-1, 
+                 num_semantic_classes=20, 
+                 semantic_boundary_weight_factor=9.0):
+        super().__init__()
+        self.semantic_loss_weight = semantic_loss_weight
+        self.boundary_loss_weight = boundary_loss_weight
+        self.lovasz_loss_weight = lovasz_loss_weight # Lovasz 가중치 저장
+        self.ignore_index = ignore_index
+        self.semantic_boundary_weight_factor = semantic_boundary_weight_factor
+
+        # --- 손실 함수 초기화 ---
+        # 1. 시맨틱 손실용
+        self.ce_loss = CrossEntropyLoss(ignore_index=ignore_index, reduction='none')
+        self.lovasz_loss = LovaszLoss(mode="multiclass", ignore_index=ignore_index)
+        
+        # 2. 경계 손실용 헬퍼 함수들은 별도 초기화 필요 없음
+
+    def forward(self, 
+                initial_sem_logits, initial_bou_logits, 
+                final_sem_logits, final_bou_logits,
+                gt_semantic_label, gt_boundary_label):
+        
+        # --- 전처리 (기존과 동일) ---
+        if gt_boundary_label.dim() == 1:
+            gt_boundary_label_unsqueeze = gt_boundary_label.unsqueeze(-1)
+        else:
+            gt_boundary_label_unsqueeze = gt_boundary_label
+        valid_semantic_mask = (gt_semantic_label != self.ignore_index)
+        sem_weight = torch.ones_like(gt_semantic_label, dtype=torch.float32)
+        sem_weight += gt_boundary_label_unsqueeze.squeeze(-1).float() * self.semantic_boundary_weight_factor
+
+        # --- 1. 초기 Semantic Loss (CE + Lovasz) ---
+        initial_sem_loss_ce_per_point = self.ce_loss(initial_sem_logits, gt_semantic_label)
+        initial_sem_loss_ce = (initial_sem_loss_ce_per_point * sem_weight)[valid_semantic_mask].mean()
+        initial_sem_loss_lovasz = self.lovasz_loss(initial_sem_logits, gt_semantic_label)
+        # Lovasz 손실에 별도 가중치 적용
+        total_loss_initial_semantic = initial_sem_loss_ce + initial_sem_loss_lovasz * self.lovasz_loss_weight
+
+        # --- 2. 초기 Boundary Loss (BCE + Dice) ---
+        valid_boundary_mask_initial = (gt_boundary_label_unsqueeze != self.ignore_index).squeeze(-1)
+        valid_initial_bou_logits = initial_bou_logits[valid_boundary_mask_initial]
+        valid_gt_boundary_label_initial = gt_boundary_label_unsqueeze[valid_boundary_mask_initial]
+        if valid_gt_boundary_label_initial.numel() > 0:
+            loss_initial_bou_bce = _binary_cross_entropy(valid_initial_bou_logits, valid_gt_boundary_label_initial)
+            loss_initial_bou_dice = _binary_dice_loss(valid_initial_bou_logits, valid_gt_boundary_label_initial)
+            total_loss_initial_boundary = loss_initial_bou_bce + loss_initial_bou_dice
+        else:
+            total_loss_initial_boundary = torch.tensor(0.0, device=initial_bou_logits.device)
+
+        # --- 3. 최종 Semantic Loss (CE + Lovasz) ---
+        final_sem_loss_ce_per_point = self.ce_loss(final_sem_logits, gt_semantic_label)
+        final_sem_loss_ce = (final_sem_loss_ce_per_point * sem_weight)[valid_semantic_mask].mean()
+        final_sem_loss_lovasz = self.lovasz_loss(final_sem_logits, gt_semantic_label)
+        # Lovasz 손실에 별도 가중치 적용
+        total_loss_final_semantic = final_sem_loss_ce + final_sem_loss_lovasz * self.lovasz_loss_weight
+
+        # --- 4. 최종 Boundary Loss (BCE + Dice) ---
+        valid_boundary_mask_final = (gt_boundary_label_unsqueeze != self.ignore_index).squeeze(-1)
+        valid_final_bou_logits = final_bou_logits[valid_boundary_mask_final]
+        valid_gt_boundary_label_final = gt_boundary_label_unsqueeze[valid_boundary_mask_final]
+        if valid_gt_boundary_label_final.numel() > 0:
+            loss_final_bou_bce = _binary_cross_entropy(valid_final_bou_logits, valid_gt_boundary_label_final)
+            loss_final_bou_dice = _binary_dice_loss(valid_final_bou_logits, valid_gt_boundary_label_final)
+            total_loss_final_boundary = loss_final_bou_bce + loss_final_bou_dice
+        else:
+            total_loss_final_boundary = torch.tensor(0.0, device=final_bou_logits.device)
+
+        # --- 최종 손실 합산 ---
+        total_loss = (total_loss_initial_semantic * self.semantic_loss_weight +
+                      total_loss_initial_boundary * self.boundary_loss_weight +
+                      total_loss_final_semantic * self.semantic_loss_weight +
+                      total_loss_final_boundary * self.boundary_loss_weight)
+        
+        # --- 반환 딕셔너리 ---
+        losses = {
+            'loss_initial_semantic': total_loss_initial_semantic * self.semantic_loss_weight,
+            'loss_initial_boundary': total_loss_initial_boundary * self.boundary_loss_weight,
+            'loss_final_semantic': total_loss_final_semantic * self.semantic_loss_weight,
+            'loss_final_boundary': total_loss_final_boundary * self.boundary_loss_weight,
+            'loss': total_loss
+        }
+        
+        return losses
