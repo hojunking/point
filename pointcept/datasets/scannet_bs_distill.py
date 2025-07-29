@@ -5,7 +5,10 @@ import numpy as np
 from pointcept.utils.logger import get_root_logger
 from .builder import DATASETS
 from .scannet import ScanNetDataset  # [수정] 기본 ScanNetDataset을 import하여 상속
-
+from .preprocessing.scannet.meta_data.scannet200_constants import (
+    VALID_CLASS_IDS_20,
+    VALID_CLASS_IDS_200,
+)
 @DATASETS.register_module()
 class ScanNetBSDistillDataset(ScanNetDataset):
     def __init__(self,
@@ -49,3 +52,15 @@ class ScanNetBSDistillDataset(ScanNetDataset):
             data_dict['features'] = np.zeros((data_dict['coord'].shape[0], 1), dtype=np.float32)
         
         return data_dict
+
+@DATASETS.register_module()
+class ScanNet200DatasetBSDistill(ScanNetBSDistillDataset):
+    VALID_ASSETS = [
+        "coord",
+        "color",
+        "normal",
+        "segment200",
+        "instance",
+        "features",
+    ]
+    class2id = np.array(VALID_CLASS_IDS_200)

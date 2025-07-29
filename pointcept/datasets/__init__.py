@@ -7,7 +7,7 @@ from .s3dis import S3DISDataset
 from .scannet import ScanNetDataset, ScanNet200Dataset
 from .scannet_b import ScanNetDatasetBoundary
 from .scannet_distill import ScanNetDistillDataset
-from .scannet_bs_distill import ScanNetBSDistillDataset
+from .scannet_bs_distill import ScanNetBSDistillDataset, ScanNet200DatasetBSDistill
 from .scannetpp import ScanNetPPDataset
 from .scannet_pair import ScanNetPairDataset
 from .hm3d import HM3DDataset
