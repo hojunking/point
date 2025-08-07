@@ -859,8 +859,6 @@ class PointTransformerV3BSBlock(PointModule):
         point = self.embedding(point)
         point = self.enc(point)
 
-        encoder_features_tensor  = point.feat
-
         if not self.cls_mode:
             point = self.dec(point)
         # else:
@@ -873,6 +871,6 @@ class PointTransformerV3BSBlock(PointModule):
         # BFANet BSBlock 적용
         if self.bfanet_block is not None: # BSBlock이 초기화된 경우에만 적용
             point = self.bfanet_block(point) # point.feat와 point.boundary_pred_logits가 업데이트됨
-
-        return point, encoder_features_tensor
+        #print(point)
+        return point
 

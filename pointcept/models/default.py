@@ -261,7 +261,7 @@ class SegmentorBS(nn.Module): # DefaultSegmentorV2를 대체할 새로운 클래
         else:
             feat = point # should not happen if backbone returns Point
         
-        seg_logits = self.seg_head(feat) # 최종 semantic prediction logits (N, num_classes)
+        #seg_logits = self.seg_head(feat) # 최종 semantic prediction logits (N, num_classes)
         
         return_dict = dict()
         if return_point:
