@@ -715,4 +715,4 @@ class PointTransformerV3(PointModule):
         #         indptr=nn.functional.pad(point.offset, (1, 0)),
         #         reduce="mean",
         #     )
-        return point, encoder_features_tensor 
+        return point 

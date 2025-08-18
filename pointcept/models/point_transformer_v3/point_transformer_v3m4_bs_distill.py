@@ -851,28 +851,28 @@ class PointTransformerV3BSBlock(PointModule):
         if bsblock_cfg is not None:
             self.bfanet_block = BSBlock(**bsblock_cfg)
 
-        def forward(self, data_dict):
-            point = Point(data_dict)
-            point.serialization(order=self.order, shuffle_orders=self.shuffle_orders)
-            point.sparsify()
+    def forward(self, data_dict):
+        point = Point(data_dict)
+        point.serialization(order=self.order, shuffle_orders=self.shuffle_orders)
+        point.sparsify()
 
-            point = self.embedding(point)
-            point = self.enc(point)
+        point = self.embedding(point)
+        point = self.enc(point)
 
-            encoder_features_tensor  = point.feat
+        encoder_features_tensor  = point.feat
 
-            if not self.cls_mode:
-                point = self.dec(point)
-            # else:
-            #     point.feat = torch_scatter.segment_csr(
-            #         src=point.feat,
-            #         indptr=nn.functional.pad(point.offset, (1, 0)),
-            #         reduce="mean",
-            #     )
+        if not self.cls_mode:
+            point = self.dec(point)
+        # else:
+        #     point.feat = torch_scatter.segment_csr(
+        #         src=point.feat,
+        #         indptr=nn.functional.pad(point.offset, (1, 0)),
+        #         reduce="mean",
+        #     )
 
-            # BFANet BSBlock 적용
-            if self.bfanet_block is not None: # BSBlock이 초기화된 경우에만 적용
-                point = self.bfanet_block(point) # point.feat와 point.boundary_pred_logits가 업데이트됨
-            #print(point)
-            return point, encoder_features_tensor
+        # BFANet BSBlock 적용
+        if self.bfanet_block is not None: # BSBlock이 초기화된 경우에만 적용
+            point = self.bfanet_block(point) # point.feat와 point.boundary_pred_logits가 업데이트됨
+        #print(point)
+        return point, encoder_features_tensor
 
