@@ -25,6 +25,41 @@ class Criteria(object):
         for c in self.criteria:
             loss += c(pred, target)
         return loss
+    
+class Criteria_matterport3d(object):
+    def __init__(self, cfg=None):
+        self.cfg = cfg if cfg is not None else []
+        self.criteria = []
+        for loss_cfg in self.cfg:
+            self.criteria.append(LOSSES.build(cfg=loss_cfg))
+
+    def __call__(self, pred, target):
+        if len(self.criteria) == 0:
+            # loss computation occur in model
+            return pred
+
+        total_loss = None
+        for c in self.criteria:
+            # ignore_index 가져오기 (loss마다 다를 수 있음)
+            ignore_index = getattr(c, "ignore_index", -1)
+
+            # 모든 픽셀이 ignore인 경우 스킵
+            if (target == ignore_index).all():
+                continue
+
+            # loss 계산
+            current_loss = c(pred, target)
+
+            if total_loss is None:
+                total_loss = current_loss
+            else:
+                total_loss = total_loss + current_loss
+
+        # 모든 loss가 skip된 경우 (empty batch 방어)
+        if total_loss is None:
+            total_loss = pred.new_tensor(0.0, requires_grad=True)
+
+        return total_loss
 
 class Criteria_bs(object):
     def __init__(self, cfg=None):
@@ -110,6 +145,9 @@ class Criteria_bs_distil(object):
   
 def build_criteria(cfg):
     return Criteria(cfg)
+
+def build_matterport3d_criteria(cfg):
+    return Criteria_matterport3d(cfg)
 
 def build_criteria_bs(cfg):
     return Criteria_bs(cfg)
