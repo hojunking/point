@@ -35,27 +35,26 @@ class Criteria_matterport3d(object):
 
     def __call__(self, pred, target):
         if len(self.criteria) == 0:
-            # loss computation occur in model
+            # loss computation occurs in model
             return pred
 
         total_loss = None
         for c in self.criteria:
-            # ignore_index 가져오기 (loss마다 다를 수 있음)
+            # 각 loss의 ignore_index 가져오기 (loss마다 다를 수 있음)
             ignore_index = getattr(c, "ignore_index", -1)
 
-            # 모든 픽셀이 ignore인 경우 스킵
+            # 모든 픽셀이 ignore면 skip
             if (target == ignore_index).all():
                 continue
 
-            # loss 계산
-            current_loss = c(pred, target)
+            loss_val = c(pred, target)
 
             if total_loss is None:
-                total_loss = current_loss
+                total_loss = loss_val
             else:
-                total_loss = total_loss + current_loss
+                total_loss = total_loss + loss_val
 
-        # 모든 loss가 skip된 경우 (empty batch 방어)
+        # 모든 loss가 skip된 경우 — 반드시 Tensor로 반환해야 함!
         if total_loss is None:
             total_loss = pred.new_tensor(0.0, requires_grad=True)
 
@@ -121,7 +120,6 @@ class Criteria_bs_distil(object):
                  teacher_feature,
                  input_dict):            # gt_label을 포함한 dict
         
-        # [수정] Point 객체에서 직접 필요한 logits과 GT label을 꺼내서 사용
         bs_loss_dict = self.criteria[0](
             initial_sem_logits=point_student.initial_semantic_logits, 
             initial_bou_logits=point_student.initial_boundary_logits, 
@@ -141,7 +139,67 @@ class Criteria_bs_distil(object):
         final_loss['loss_distill'] = distill_loss
         final_loss['loss'] = bs_loss_dict['loss'] + distill_loss
         return final_loss
-    
+
+class Criteria_matterport3d_bs_distil(object):
+    def __init__(self, cfg=None):
+        self.cfg = cfg if cfg is not None else []
+        self.criteria = []
+        for loss_cfg in self.cfg:
+            self.criteria.append(LOSSES.build(cfg=loss_cfg))
+
+    def __call__(self,
+                 point_student,          # Point 객체 (logits 내장)
+                 student_feature_bridged,
+                 teacher_feature,
+                 input_dict):
+        bs_loss_dict = {}
+        if len(self.criteria) > 0:
+            bs_criterion = self.criteria[0]
+
+            # Point 내부 logits과 GT label을 이용
+            pred_sem_init = point_student.initial_semantic_logits
+            pred_bou_init = point_student.initial_boundary_logits
+            pred_sem_final = point_student.final_semantic_logits
+            pred_bou_final = point_student.final_boundary_logits
+
+            gt_sem = input_dict["segment"]
+            gt_bou = input_dict["boundary"]
+
+            ignore_index_sem = getattr(bs_criterion, "ignore_index", -1)
+            ignore_index_bou = getattr(bs_criterion, "ignore_index", -1)
+
+            if not (gt_sem == ignore_index_sem).all():
+                num_classes = pred_sem_final.shape[1]
+                gt_sem = gt_sem.clone()
+                # out-of-range or invalid → ignore index로 통일
+                gt_sem[(gt_sem < 0) | (gt_sem >= num_classes)] = ignore_index_sem
+
+                bs_loss_dict = bs_criterion(
+                    initial_sem_logits=pred_sem_init,
+                    initial_bou_logits=pred_bou_init,
+                    final_sem_logits=pred_sem_final,
+                    final_bou_logits=pred_bou_final,
+                    gt_semantic_label=gt_sem,
+                    gt_boundary_label=gt_bou,
+                )
+            else:
+                # loss가 모두 skip된 경우 tensor로 반환
+                zero_tensor = pred_sem_final.new_tensor(0.0, requires_grad=True)
+                bs_loss_dict = {"loss": zero_tensor}
+        distill_loss = 0.0
+        if len(self.criteria) > 1:
+            distill_criterion = self.criteria[1]
+            if student_feature_bridged is not None and teacher_feature is not None:
+                distill_loss = distill_criterion(student_feature_bridged, teacher_feature)
+            else:
+                # 평가 시 None이면 0.0 loss 반환
+                distill_loss = pred_sem_final.new_tensor(0.0, requires_grad=True)
+
+        final_loss = bs_loss_dict
+        final_loss["loss_distill"] = distill_loss
+        final_loss["loss"] = bs_loss_dict["loss"] + distill_loss
+
+        return final_loss
   
 def build_criteria(cfg):
     return Criteria(cfg)
@@ -157,3 +215,6 @@ def build_criteria_distil(cfg):
 
 def build_criteria_bs_distil(cfg):
     return Criteria_bs_distil(cfg)
+
+def build_matterport3d_criteria_bs_distil(cfg):
+    return Criteria_matterport3d_bs_distil(cfg)
