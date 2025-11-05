@@ -4,12 +4,14 @@ _base_ = [
 ]
 
 # misc custom setting
-batch_size = 12  # bs: total bs in all gpus
-num_worker = 24
+batch_size = 4  # bs: total bs in all gpus
+num_worker = 12
 mix_prob = 0.8
 empty_cache = False
 enable_amp = True
-
+enable_wandb = False
+seed = 43244662
+# model settings
 # model settings
 model = dict(
     type="DefaultSegmentorV2",
