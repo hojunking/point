@@ -35,12 +35,14 @@ class ScanNetDatasetBoundary(ScanNetDataset):
         self,
         boundary_root=None,
         features_root=None, #
-        features_flag=[],
+        features_flag=None,
+        sh_degree=0,
         **kwargs,
     ):
         self.boundary_root = boundary_root
         self.features_root = features_root
-        self.features_flag = features_flag
+        self.features_flag = features_flag or []
+        self.sh_degree = sh_degree
         
         super().__init__(**kwargs)
 
@@ -76,17 +78,36 @@ class ScanNetDatasetBoundary(ScanNetDataset):
                 
                 selected_features_list = []
                 current_feature_idx_in_npy = 0 # features.npy 내 현재 특징의 시작 인덱스 (3DGS 순서)
+
+                def take_feature(dim):
+                    nonlocal current_feature_idx_in_npy
+                    start = current_feature_idx_in_npy
+                    end = start + dim
+                    current_feature_idx_in_npy = end
+                    return all_features_3dgs[:, start:end]
+
                 if "scale" in self.features_flag:
-                    selected_features_list.append(all_features_3dgs[:, current_feature_idx_in_npy : current_feature_idx_in_npy + 3])
-                current_feature_idx_in_npy += 3
+                    selected_features_list.append(take_feature(3))
+                else:
+                    current_feature_idx_in_npy += 3
 
                 if "opacity" in self.features_flag:
-                    selected_features_list.append(all_features_3dgs[:, current_feature_idx_in_npy : current_feature_idx_in_npy + 1])
-                current_feature_idx_in_npy += 1
+                    selected_features_list.append(take_feature(1))
+                else:
+                    current_feature_idx_in_npy += 1
                 
                 if "rotation" in self.features_flag:
-                    selected_features_list.append(all_features_3dgs[:, current_feature_idx_in_npy : current_feature_idx_in_npy + 4])
-                current_feature_idx_in_npy += 4 
+                    selected_features_list.append(take_feature(3))
+                else:
+                    current_feature_idx_in_npy += 3 
+                
+                if "sh" in self.features_flag and self.sh_degree and self.sh_degree > 0:
+                    sh_dim = min(48, 3 * (self.sh_degree + 1) ** 2)
+                    selected_features_list.append(take_feature(sh_dim))
+                    remaining = max(48 - sh_dim, 0)
+                    current_feature_idx_in_npy += remaining
+                else:
+                    current_feature_idx_in_npy += 48
                 
                 if selected_features_list:
                     # 기존 data_dict["features"]를 덮어씁니다.

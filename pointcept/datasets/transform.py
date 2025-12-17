@@ -895,8 +895,8 @@ class GridSample(object):
                         # displacement = np.sum(
                         #     displacement * data_dict["normal"], axis=-1, keepdims=True
                         # )
-                    data_dict["displacement"] = displacement[idx_part]
-                    data_dict["index_valid_keys"].append("displacement")
+                    data_part["displacement"] = displacement[idx_part]
+                    data_part["index_valid_keys"].append("displacement")
                 data_part_list.append(data_part)
             return data_part_list
         else:
