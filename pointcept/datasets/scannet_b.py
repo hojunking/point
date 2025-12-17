@@ -52,24 +52,20 @@ class ScanNetDatasetBoundary(ScanNetDataset):
         data_dict = super().get_data(idx)
 
         scene_name = self.get_data_name(idx) 
-        # === BFANet: Boundary Label 로딩 로직 (boundary_root 사용) ===
-        # 1. boundary_root가 설정되었는지 확인 (TypeError 방지)
-        if self.boundary_root is not None:
-            boundary_file_path = os.path.join(self.boundary_root, self.split, scene_name, "boundary.npy")
-            
-            # 2. boundary.npy 파일이 존재하는지 확인 (FileNotFoundError 방지)
-            if os.path.exists(boundary_file_path):
-                data_dict["boundary"] = np.load(boundary_file_path).reshape([-1]).astype(np.int32)
-            else:
+        # 2. Boundary 레이블 로드
+        if self.boundary_root:
+            try:
+                boundary_path = os.path.join(self.boundary_root, self.split, scene_name, "boundary.npy")
+                data_dict['boundary'] = np.load(boundary_path).reshape(-1).astype(np.int32)
+            except FileNotFoundError:
                 logger = get_root_logger()
-                logger.warning(f"Boundary label file not found at {boundary_file_path}. Initializing with zeros for {scene_name}.")
-                data_dict["boundary"] = np.zeros(data_dict["coord"].shape[0], dtype=np.int32)
-        # else:
-        #     # boundary_root가 지정되지 않았을 때의 처리 (경고 및 0 초기화)
-        #     logger = get_root_logger()
-        #     logger.warning(f"boundary_root not specified. Initializing boundary labels with zeros for {scene_name}.")
-        #     data_dict["boundary"] = np.zeros(data_dict["coord"].shape[0], dtype=np.int32)
-        # ===============================================================
+                logger.warning(f"Boundary file not found at {boundary_path}. Filling with zeros.")
+                data_dict['boundary'] = np.zeros(data_dict['coord'].shape[0], dtype=np.int32)
+        else:
+            # boundary_root가 config에 없으면 0으로 채움
+            data_dict['boundary'] = np.zeros(data_dict['coord'].shape[0], dtype=np.int32)
+            logger = get_root_logger()
+            logger.warning(f"Boundary root not found at {boundary_path}. Filling with zeros.")
         
         if self.features_root is not None and len(self.features_flag) > 0:
             features_file_path = os.path.join(self.features_root, self.split, scene_name, "features.npy")
@@ -124,7 +120,7 @@ class ScanNetDatasetBoundary(ScanNetDataset):
         elif self.features_root is not None and len(self.features_flag) == 0:
             # features_root는 지정되었으나 features_flag가 비어있는 경우 (features를 사용하지 않음)
             logger = get_root_logger()
-            logger.info(f"features_root specified but features_flag is empty. No custom features loaded for {scene_name}.")
+            logger.warning(f"features_root specified but features_flag is empty. No custom features loaded for {scene_name}.")
             data_dict["features"] = np.zeros((data_dict["coord"].shape[0], 0), dtype=np.float32)
         # self.features_root가 None인 경우는 super().get_data()에서 로드된 기존 features를 유지합니다.
         # super().get_data()가 features를 로드하지 않는 경우를 대비한 방어적 초기화:
