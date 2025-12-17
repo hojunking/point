@@ -24,7 +24,7 @@ model = dict(
     # backbone - student & teacher
     backbone=dict(
         type="PT-v3m2",
-        in_channels=7,
+        in_channels=9,
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(2, 2, 2, 2),
         enc_depths=(3, 3, 3, 12, 3),
@@ -80,7 +80,7 @@ model = dict(
 )
 
 # scheduler settings
-epoch = 100
+epoch = 400
 base_lr = 0.002
 lr_decay = 0.9  # layer-wise lr decay
 
@@ -115,6 +115,9 @@ transform = [
     dict(
         type="MultiViewGenerator",
         view_keys=("coord", "origin_coord", "color", "features"),
+        
+        # normal and opacity
+        #view_keys=('coord', 'origin_coord', 'color', 'normal','features'),
         global_view_num=2,
         global_view_scale=(0.4, 1.0),
         local_view_num=4,
@@ -185,15 +188,26 @@ transform = [
         offset_keys_dict=dict(),
         # global_feat_keys=("global_coord", "global_color", "global_normal"),
         # local_feat_keys=("local_coord", "local_color", "local_normal"),
+
+        # color + gs features only
         global_feat_keys=("global_coord", "global_color", "global_features"),
         local_feat_keys=("local_coord", "local_color", "local_features"),
+
+        # opacity and norma
+        # global_feat_keys=('global_coord', 'global_color',
+        #                           'global_normal', 'global_features'),
+        # local_feat_keys=('local_coord', 'local_color', 'local_normal',
+        #                          'local_features')
+
+        
     ),
 ]
 
-boundary_root = locals().get("boundary_root", "")
-features_root = "data/features/base_Pup3dgs"  # 기본 features.npy 경로
+#boundary_root = locals().get("boundary_root", "")
+features_root = "data/features/scenesplats_3dgs_k20_mahalanobis"  # 기본 features.npy 경로
 dataset_type = "ScanNetDatasetBoundary"
-
+feature_flag = ['scale', 'opacity']  # 기본 feature 플래그 설정
+sh_degree = 0
 data = dict(
     train=dict(
         type=dataset_type,      # 바로 ScanNetDataset을 지정
@@ -202,7 +216,8 @@ data = dict(
         test_mode=False,
         features_root=features_root,
         #boundary_root=boundary_root,
-        features_flag=[],
+        features_flag=feature_flag,
+        sh_degree=sh_degree,
         transform=transform,       # 이전에 정의된 transform 파이프라인
 
     )
