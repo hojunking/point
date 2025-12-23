@@ -3,12 +3,11 @@ _base_ = ["../_base_/default_runtime.py"]
 
 # misc custom setting
 batch_size = 4
-num_worker = 16
+num_worker = 12
 mix_prob = 0.8  # mix_prob는 증류 학습 시에는 0으로 설정하는 것을 고려해볼 수 있습니다.
 empty_cache = False
 enable_amp = True
 enable_wandb = False
-seed = 43244662
 
 # --- 여기에 새로운 플래그 추가 ---
 enable_distillation = True  # 증류를 사용하려면 True, 끄려면 False
@@ -19,7 +18,7 @@ model = dict(
     num_classes=20,
     backbone_out_channels=64,
     backbone=dict(
-        type="PT-v3m3",
+        type="PT-v3m4",
         in_channels=6,
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(2, 2, 2, 2),
@@ -62,7 +61,7 @@ model = dict(
     ),
     teacher_backbone=dict(
         type="PT-v3m2",
-        in_channels=4,
+        in_channels=6,
         order=("z", "z-trans", "hilbert", "hilbert-trans"),
         stride=(2, 2, 2, 2),
         enc_depths=(3, 3, 3, 12, 3),
@@ -85,7 +84,7 @@ model = dict(
         mask_token=False,
         enc_mode=False,
         freeze_encoder=False,
-        checkpoint_path="pre_trained/sonata_color-opacity_epo600.pth",
+        checkpoint_path="",
     ),
     mlp_bridge=dict(
         # Student와 Teacher 인코더의 마지막 출력 채널과 일치시킵니다.
@@ -94,16 +93,16 @@ model = dict(
         hidden_channels=256
     ),
     
-    criteria=[dict( # <--- 변경: 단일 BoundarySemanticLoss 사용
-            type="BoundarySemanticLoss", # 새로운 Loss 클래스 이름 (misc.py에 추가)
-            semantic_loss_weight=1.0, # Semantic Loss 가중치
-            boundary_loss_weight=1.0, # Boundary Loss 가중치
-            ignore_index=-1, # Dataset의 ignore_index와 일치
-            num_semantic_classes=20, # 데이터셋의 클래스 수와 일치
+    criteria=[dict(
+            type='BoundarySemanticLoss',
+            semantic_loss_weight=1.0,
+            boundary_loss_weight=0.9,
+            ignore_index=-1,
+            num_semantic_classes=20,
             semantic_boundary_weight_factor=9.0
         ),
         # 보조 증류 손실
-        dict(type="FeatureDistillationLoss", loss_weight=0.0, loss_type="L2")
+        dict(type="FeatureDistillationLoss", loss_weight=0.0, loss_type="CosineSimilarity")
             # CosineSimilarity L2
     ],
 )
@@ -111,24 +110,28 @@ model = dict(
 # scheduler settings
 epoch = 800
 #optimizer = dict(type="AdamW", lr=0.006, weight_decay=0.05)
-optimizer = dict(type="AdamW", lr=0.006, weight_decay=0.05)
+optimizer = dict(type="AdamW", lr=0.002, weight_decay=0.05)
 scheduler = dict(
     type="OneCycleLR",
     #max_lr=[0.006, 0.0006],
-    max_lr=[0.006, 0.0006],
+    max_lr=[0.002, 0.0002],
     pct_start=0.05,
     anneal_strategy="cos",
     div_factor=10.0,
     final_div_factor=1000.0,
 )
 #param_dicts = [dict(keyword="block", lr=0.0006)]
-param_dicts = [dict(keyword="block", lr=0.0006)]
+param_dicts = [dict(keyword="block", lr=0.0002)]
 
 # dataset settings
-dataset_type = "ScanNetBSDistillDataset"
+dataset_type = "ScanNetDatasetBoundary"
 data_root = "data/scannet"
-features_root = "data/features/scenesplats_3dgs"  # 기본 features.npy 경로
-boundary_root = locals().get("boundary_root", "")
+features_root = "data/features/scenesplats_3dgs_k20_mahalanobis"  # 기본 features.npy 경로
+boundary_root = "data/boundary/mah_k20_bfa004_scale07"
+feature_flag = ["scale"]
+sh_degree = 0
+use_gs_features = len(feature_flag) > 0
+feat_teacher_keys = ("color", "features") if use_gs_features else ("color",)
 
 
 data = dict(
@@ -162,7 +165,9 @@ data = dict(
         data_root=data_root,
         features_root=features_root,
         boundary_root=boundary_root,
-        lr_file="data/scannet/train100_samples.txt",
+        features_flag=feature_flag,
+        sh_degree=sh_degree,
+        #lr_file="data/scannet/train100_samples.txt",
         transform=[
             dict(type="CenterShift", apply_z=True),
             dict(
@@ -199,7 +204,7 @@ data = dict(
                 keys=("coord", "grid_coord", "segment", "boundary"),
                 #feat_keys=("color", "normal"),
                 feat_keys=("color", "normal"),
-                feat_teacher_keys=("color", "features")
+                feat_teacher_keys=feat_teacher_keys
             ),
         ],
         test_mode=False,
@@ -210,7 +215,9 @@ data = dict(
         data_root=data_root,
         features_root=features_root,
         boundary_root=boundary_root,
-        lr_file="data/scannet/valid20_samples.txt",
+        features_flag=feature_flag,
+        sh_degree=sh_degree,
+        #lr_file="data/scannet/valid20_samples.txt",
         transform=[
             dict(type="CenterShift", apply_z=True),
             dict(
@@ -228,7 +235,7 @@ data = dict(
                 keys=("coord", "grid_coord", "segment", "boundary"),
                 #feat_keys=("color", "normal"),
                 feat_keys=("color", "normal"),
-                feat_teacher_keys=("color", "features")
+                feat_teacher_keys=feat_teacher_keys
             ),
         ],
         test_mode=False,
@@ -239,7 +246,9 @@ data = dict(
         data_root=data_root,
         features_root=features_root,
         boundary_root=boundary_root,
-        lr_file="data/scannet/valid20_samples.txt",
+        features_flag=feature_flag,
+        sh_degree=sh_degree,
+        #lr_file="data/scannet/valid20_samples.txt",
 
         transform=[
             dict(type="CenterShift", apply_z=True),
@@ -263,7 +272,7 @@ data = dict(
                     keys=("coord", "grid_coord", "index", "boundary"),
                     #feat_keys=("color", "normal"),
                     feat_keys=("color", "normal"),
-                    feat_teacher_keys=("color", "features")
+                    feat_teacher_keys=feat_teacher_keys
                 ),
             ],
             aug_transform=[
@@ -403,6 +412,6 @@ hooks = [
 if enable_distillation:
     hooks.append(
         dict(type="DistillationSchedulerHook",
-             start_epoch=50, 
-             distill_loss_weight=0.1)
+             start_epoch=0, 
+             distill_loss_weight=0.4)
     )
