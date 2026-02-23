@@ -2,7 +2,7 @@
 
 from pointcept.engines.hooks import HookBase
 from .builder import HOOKS
-from pointcept.models.losses.misc import FeatureDistillationLoss # Loss 클래스가 있는 정확한 경로로 수정 필요
+from pointcept.models.losses.misc import FeatureDistillationLoss
 
 @HOOKS.register_module()
 class DistillationSchedulerHook(HookBase):
@@ -17,13 +17,26 @@ class DistillationSchedulerHook(HookBase):
         # trainer.epoch is 0-indexed
         if not self.activated and self.trainer.epoch >= self.start_epoch:
             # Handle both multi-GPU (DDP) and single-GPU cases
-            if hasattr(self.trainer.model, 'module'):
+            if hasattr(self.trainer.model, "module"):
                 model = self.trainer.model.module  # Multi-GPU
             else:
-                model = self.trainer.model      # Single-GPU
+                model = self.trainer.model  # Single-GPU
 
-            # [FIX] Access the internal list '.criteria' inside the 'Criteria_bs_distil' object
-            for criterion in model.criteria.criteria:
+            # Support both semseg distill models (model.criteria)
+            # and PG-v1m4 models (model.distill_criteria).
+            if hasattr(model, "criteria") and hasattr(model.criteria, "criteria"):
+                criteria_list = model.criteria.criteria
+            elif hasattr(model, "distill_criteria") and hasattr(
+                model.distill_criteria, "criteria"
+            ):
+                criteria_list = model.distill_criteria.criteria
+            else:
+                self.trainer.logger.warning(
+                    "DistillationSchedulerHook: no compatible criteria container found."
+                )
+                return
+
+            for criterion in criteria_list:
                 if isinstance(criterion, FeatureDistillationLoss):
                     criterion.loss_weight = self.distill_loss_weight
                     self.trainer.logger.info(

@@ -9,6 +9,7 @@ enable_amp = True
 evaluate = True
 enable_wandb = False
 seed = 43244662
+enable_distillation = True
 
 class_names = [
     "wall",
@@ -362,6 +363,15 @@ hooks = [
     dict(type="CheckpointSaver", save_freq=None),
     dict(type="PreciseEvaluator", test_last=False),
 ]
+
+if enable_distillation:
+    hooks.append(
+        dict(
+            type="DistillationSchedulerHook",
+            start_epoch=0,
+            distill_loss_weight=0.4,
+        )
+    )
 
 # Tester
 test = dict(
