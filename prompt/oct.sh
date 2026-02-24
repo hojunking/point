@@ -62,8 +62,8 @@ for BOUNDARY_ROOT in "${BOUNDARY_ROOTS[@]}"; do
   # 실험 이름 설정
   EXP_NAME="scannet200-$(basename "$BOUNDARY_ROOT")_baseline"
 
-  # train.sh가 사용할 수 있도록 BOUNDARY_ROOT도 환경 변수로 내보내기
-  export BOUNDARY_ROOT="$BOUNDARY_ROOT"
+  # config override 옵션 구성 (boundary_root를 train/val/test 모두에 주입)
+  EXTRA_OPTIONS="boundary_root=$BOUNDARY_ROOT data.train.boundary_root=$BOUNDARY_ROOT data.val.boundary_root=$BOUNDARY_ROOT data.test.boundary_root=$BOUNDARY_ROOT"
 
   echo "=================================================="
   echo "Experiment name: $EXP_NAME"
@@ -71,6 +71,7 @@ for BOUNDARY_ROOT in "${BOUNDARY_ROOTS[@]}"; do
   echo "=================================================="
 
   # train.sh 스크립트 호출
+  EXTRA_OPTIONS="$EXTRA_OPTIONS" \
   sh scripts/train.sh \
     -g 1 \
     -d scannet200 \
@@ -79,6 +80,6 @@ for BOUNDARY_ROOT in "${BOUNDARY_ROOTS[@]}"; do
     -c semseg-octformer-v1m2-bfa-bs
 
   # 로그 분석 및 결과 저장
-  LOG_PATH="exp/scannet/${EXP_NAME}/train.log"
+  LOG_PATH="exp/scannet200/${EXP_NAME}/train.log"
   python3 ./gspread/gspread_results.py "$LOG_PATH" "$EXP_NAME" sample100_test
 done

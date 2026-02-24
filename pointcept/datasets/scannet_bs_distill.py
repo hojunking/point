@@ -27,18 +27,18 @@ class ScanNetBSDistillDataset(ScanNetDataset):
         scene_name = self.get_data_name(idx)
         
         # 2. Boundary 레이블 로드
+        logger = get_root_logger()
         if self.boundary_root:
             try:
                 boundary_path = os.path.join(self.boundary_root, self.split, scene_name, "boundary.npy")
                 data_dict['boundary'] = np.load(boundary_path).reshape(-1).astype(np.int32)
             except FileNotFoundError:
-                logger = get_root_logger()
                 logger.warning(f"Boundary file not found at {boundary_path}. Filling with zeros.")
                 data_dict['boundary'] = np.zeros(data_dict['coord'].shape[0], dtype=np.int32)
         else:
-            # boundary_root가 config에 없으면 0으로 채움
+            # boundary_root가 config에 없으면 0으로 채움 + 경고
             data_dict['boundary'] = np.zeros(data_dict['coord'].shape[0], dtype=np.int32)
-            logger.warning(f"Boundary root not found at {boundary_path}. Filling with zeros.")
+            logger.warning("boundary_root is empty. Filling boundary labels with zeros.")
 
         # 3. Teacher가 사용할 Opacity 특징 로드
         if self.features_root:
@@ -49,11 +49,9 @@ class ScanNetBSDistillDataset(ScanNetDataset):
                 data_dict['features'] = all_features_3dgs[:, 3:4].astype(np.float32)
             except FileNotFoundError:
                 data_dict['features'] = np.zeros((data_dict['coord'].shape[0], 1), dtype=np.float32)
-                logger = get_root_logger()
                 logger.warning(f"Features file not found at path, {self.features_root} Filling with zeros.")
         else:
             data_dict['features'] = np.zeros((data_dict['coord'].shape[0], 1), dtype=np.float32)
-            logger = get_root_logger()
             logger.warning(f"Features file not found at {self.features_root}. Filling with zeros.")
 
         return data_dict
@@ -100,6 +98,7 @@ class ScanNet200DatasetBSDistill(ScanNetDataset): # <--- ScanNetDataset을 직�
                 data_dict['boundary'] = np.zeros(data_dict['coord'].shape[0], dtype=np.int32)
         else:
             data_dict['boundary'] = np.zeros(data_dict['coord'].shape[0], dtype=np.int32)
+            logger.warning("boundary_root is empty. Filling boundary labels with zeros.")
 
         # 3. Teacher가 사용할 Opacity 특징 로드 (기존 로직과 동일)
         if self.features_root:
