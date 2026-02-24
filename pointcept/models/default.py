@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch_scatter
 import torch_cluster
 
-from pointcept.models.losses import build_criteria, build_criteria_bs, build_criteria_distil, build_criteria_bs_distil, build_matterport3d_criteria, build_matterport3d_criteria_bs_distil
+from pointcept.models.losses import build_criteria, build_criteria_bs, build_criteria_distil, build_criteria_bs_distil, build_matterport3d_criteria#, build_matterport3d_criteria_bs_distil
 from pointcept.models.utils.structure import Point
 from pointcept.models.utils import offset2batch
 from .builder import MODELS, build_model
@@ -355,6 +355,72 @@ class SegmentorBS(nn.Module): # DefaultSegmentorV2를 대체할 새로운 클래
             return_dict["boundary_logits"] = point.final_boundary_logits 
 
         return return_dict
+
+
+@MODELS.register_module()
+class SegmentorBSOctFormer(nn.Module):
+    def __init__(
+        self,
+        num_classes,
+        backbone_out_channels,
+        backbone=None,
+        criteria=None,
+        freeze_backbone=False,
+    ):
+        super().__init__()
+        self.seg_head = nn.Identity()
+        self.backbone = build_model(backbone)
+        self.criteria = build_criteria_bs(criteria)
+        self.freeze_backbone = freeze_backbone
+        if self.freeze_backbone:
+            for p in self.backbone.parameters():
+                p.requires_grad = False
+
+    def forward(self, input_dict, return_point=False):
+        output = self.backbone(input_dict)
+        required_keys = (
+            "initial_semantic_logits",
+            "initial_boundary_logits",
+            "final_semantic_logits",
+            "final_boundary_logits",
+        )
+        missing_keys = [k for k in required_keys if k not in output]
+        if len(missing_keys) > 0:
+            raise RuntimeError(
+                "SegmentorBSOctFormer requires OctFormer-BS backbone outputs. "
+                f"Missing keys: {missing_keys}"
+            )
+        if "boundary" not in input_dict:
+            raise KeyError(
+                "SegmentorBSOctFormer requires input_dict['boundary'] for boundary supervision."
+            )
+
+        return_dict = dict()
+        if self.training:
+            losses_dict = self.criteria(
+                initial_sem_logits=output["initial_semantic_logits"],
+                initial_bou_logits=output["initial_boundary_logits"],
+                final_sem_logits=output["final_semantic_logits"],
+                final_bou_logits=output["final_boundary_logits"],
+                gt_semantic_label=input_dict["segment"],
+                gt_boundary_label=input_dict["boundary"],
+            )
+            return_dict.update(losses_dict)
+        else:
+            if "segment" in input_dict.keys():
+                losses_dict = self.criteria(
+                    initial_sem_logits=output["initial_semantic_logits"],
+                    initial_bou_logits=output["initial_boundary_logits"],
+                    final_sem_logits=output["final_semantic_logits"],
+                    final_bou_logits=output["final_boundary_logits"],
+                    gt_semantic_label=input_dict["segment"],
+                    gt_boundary_label=input_dict["boundary"],
+                )
+                return_dict.update(losses_dict)
+
+            return_dict["seg_logits"] = output["final_semantic_logits"]
+            return_dict["boundary_logits"] = output["final_boundary_logits"]
+        return return_dict
     
 @MODELS.register_module()
 class SegmentorDistill(nn.Module):
@@ -558,99 +624,99 @@ class SegmentorBSDistill(nn.Module):
         return return_dict
 
 
-@MODELS.register_module()
-class SegmentorBSDistillMattaport3d(nn.Module):
-    def __init__(self,
-                 backbone,              # Student 백본 config (PT-v3 + BSBlock)
-                 teacher_backbone,      # Teacher 백본 config (사전 학습된 PT-v3)
-                 mlp_bridge,            # MLP 브릿지 config
-                 criteria,              # 모든 Loss config를 담은 리스트
-                 **kwargs):
-        super().__init__()
+# @MODELS.register_module()
+# class SegmentorBSDistillMattaport3d(nn.Module):
+#     def __init__(self,
+#                  backbone,              # Student 백본 config (PT-v3 + BSBlock)
+#                  teacher_backbone,      # Teacher 백본 config (사전 학습된 PT-v3)
+#                  mlp_bridge,            # MLP 브릿지 config
+#                  criteria,              # 모든 Loss config를 담은 리스트
+#                  **kwargs):
+#         super().__init__()
         
-        # 1. Student 모델 초기화 (PT-v3 + BSBlock)
-        self.backbone = build_model(backbone)
+#         # 1. Student 모델 초기화 (PT-v3 + BSBlock)
+#         self.backbone = build_model(backbone)
         
-        # 2. Teacher 모델 초기화 (사전 학습된 인코더)
-        teacher_backbone_cfg = teacher_backbone.copy()
-        checkpoint_path = teacher_backbone_cfg.pop("checkpoint_path", None)
-        self.teacher_backbone = build_model(teacher_backbone_cfg)
-        if checkpoint_path:
-            load_checkpoint(self.teacher_backbone, checkpoint_path, map_location="cpu")
-        self.teacher_backbone.eval()
-        for p in self.teacher_backbone.parameters():
-            p.requires_grad = False
+#         # 2. Teacher 모델 초기화 (사전 학습된 인코더)
+#         teacher_backbone_cfg = teacher_backbone.copy()
+#         checkpoint_path = teacher_backbone_cfg.pop("checkpoint_path", None)
+#         self.teacher_backbone = build_model(teacher_backbone_cfg)
+#         if checkpoint_path:
+#             load_checkpoint(self.teacher_backbone, checkpoint_path, map_location="cpu")
+#         self.teacher_backbone.eval()
+#         for p in self.teacher_backbone.parameters():
+#             p.requires_grad = False
             
-        # 3. MLP 브릿지 초기화
-        self.mlp_bridge = nn.Sequential(
-            nn.Linear(mlp_bridge["in_channels"], mlp_bridge["hidden_channels"]),
-            nn.ReLU(inplace=True),
-            nn.Linear(mlp_bridge["hidden_channels"], mlp_bridge["out_channels"])
-        )
+#         # 3. MLP 브릿지 초기화
+#         self.mlp_bridge = nn.Sequential(
+#             nn.Linear(mlp_bridge["in_channels"], mlp_bridge["hidden_channels"]),
+#             nn.ReLU(inplace=True),
+#             nn.Linear(mlp_bridge["hidden_channels"], mlp_bridge["out_channels"])
+#         )
 
-        # 4. 모든 손실 함수를 관리할 Criteria 객체 생성
-        self.criteria = build_matterport3d_criteria_bs_distil(criteria)
+#         # 4. 모든 손실 함수를 관리할 Criteria 객체 생성
+#         self.criteria = build_matterport3d_criteria_bs_distil(criteria)
 
-    def forward(self, input_dict, return_point=False):
-        # 1. Student 경로 실행
-        # backbone은 PTv3-BSBlock이며, 최종적으로 4종류의 logit과 인코더 특징을 담은 Point 객체를 반환해야 함
-        point_student, student_feature_for_distill = self.backbone(Point(input_dict))
+#     def forward(self, input_dict, return_point=False):
+#         # 1. Student 경로 실행
+#         # backbone은 PTv3-BSBlock이며, 최종적으로 4종류의 logit과 인코더 특징을 담은 Point 객체를 반환해야 함
+#         point_student, student_feature_for_distill = self.backbone(Point(input_dict))
         
-        if isinstance(point_student, Point):
-            while "pooling_parent" in point_student.keys():
-                assert "pooling_inverse" in point_student.keys()
-                parent = point_student.pop("pooling_parent")
-                inverse = point_student.pop("pooling_inverse")
-                parent.feat = torch.cat([parent.feat, point_student.feat[inverse]], dim=-1)
-                point_student = parent
-            feat_for_seg = point_student.feat
-        else:
-            feat_for_seg = point_student # should not happen
+#         if isinstance(point_student, Point):
+#             while "pooling_parent" in point_student.keys():
+#                 assert "pooling_inverse" in point_student.keys()
+#                 parent = point_student.pop("pooling_parent")
+#                 inverse = point_student.pop("pooling_inverse")
+#                 parent.feat = torch.cat([parent.feat, point_student.feat[inverse]], dim=-1)
+#                 point_student = parent
+#             feat_for_seg = point_student.feat
+#         else:
+#             feat_for_seg = point_student # should not happen
         
         
-        # 2. Teacher 경로 실행 (그래디언트 계산 없이)
-        with torch.no_grad():
-            teacher_input_dict = {
-                "coord": input_dict["coord"],
-                "grid_coord": input_dict["grid_coord"],
-                "offset": input_dict["offset"],
-                "feat": input_dict["feat_teacher"],
-                "scene_name": input_dict.get("scene_name")
-            }
-            point_teacher = Point(teacher_input_dict)
-            point_teacher.serialization(order=self.teacher_backbone.order, shuffle_orders=self.teacher_backbone.shuffle_orders)
-            point_teacher.sparsify()
-            point_teacher = self.teacher_backbone.embedding(point_teacher)
-            point_teacher = self.teacher_backbone.enc(point_teacher) # 인코더까지만 실행
-            teacher_feature_for_distill = point_teacher.feat
+#         # 2. Teacher 경로 실행 (그래디언트 계산 없이)
+#         with torch.no_grad():
+#             teacher_input_dict = {
+#                 "coord": input_dict["coord"],
+#                 "grid_coord": input_dict["grid_coord"],
+#                 "offset": input_dict["offset"],
+#                 "feat": input_dict["feat_teacher"],
+#                 "scene_name": input_dict.get("scene_name")
+#             }
+#             point_teacher = Point(teacher_input_dict)
+#             point_teacher.serialization(order=self.teacher_backbone.order, shuffle_orders=self.teacher_backbone.shuffle_orders)
+#             point_teacher.sparsify()
+#             point_teacher = self.teacher_backbone.embedding(point_teacher)
+#             point_teacher = self.teacher_backbone.enc(point_teacher) # 인코더까지만 실행
+#             teacher_feature_for_distill = point_teacher.feat
 
-        # 3. 특징 증류
-        student_feature_bridged = self.mlp_bridge(student_feature_for_distill)
+#         # 3. 특징 증류
+#         student_feature_bridged = self.mlp_bridge(student_feature_for_distill)
         
-        return_dict = dict()
-        if return_point:
-            return_dict["point"] = point_student # point 객체 (boundary_pred_logits 포함) 반환
+#         return_dict = dict()
+#         if return_point:
+#             return_dict["point"] = point_student # point 객체 (boundary_pred_logits 포함) 반환
         
-        if self.training:
-            losses_dict = self.criteria(
-                point_student=point_student,
-                student_feature_bridged=student_feature_bridged,
-                teacher_feature=teacher_feature_for_distill,
-                input_dict=input_dict
-            )
-            return_dict.update(losses_dict)
+#         if self.training:
+#             losses_dict = self.criteria(
+#                 point_student=point_student,
+#                 student_feature_bridged=student_feature_bridged,
+#                 teacher_feature=teacher_feature_for_distill,
+#                 input_dict=input_dict
+#             )
+#             return_dict.update(losses_dict)
         
-        else: # 평가 모드
-            # 평가 시에는 메인 손실(경계+분할)만 계산
-            # if "segment" in input_dict.keys():
-            #     losses_dict = self.criteria(
-            #         point_student=point_student,
-            #         student_feature_bridged=None,
-            #         teacher_feature=None,
-            #         input_dict=input_dict
-            #     )
-            #     return_dict = losses_dict
+#         else: # 평가 모드
+#             # 평가 시에는 메인 손실(경계+분할)만 계산
+#             # if "segment" in input_dict.keys():
+#             #     losses_dict = self.criteria(
+#             #         point_student=point_student,
+#             #         student_feature_bridged=None,
+#             #         teacher_feature=None,
+#             #         input_dict=input_dict
+#             #     )
+#             #     return_dict = losses_dict
             
-            return_dict["seg_logits"] = point_student.final_semantic_logits
-            return_dict["boundary_logits"] = point_student.final_boundary_logits
-        return return_dict
+#             return_dict["seg_logits"] = point_student.final_semantic_logits
+#             return_dict["boundary_logits"] = point_student.final_boundary_logits
+#         return return_dict
