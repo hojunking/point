@@ -543,7 +543,6 @@ class PointTransformerV3(PointModule):
         upcast_attention=False,
         upcast_softmax=False,
         enc_mode=False,
-        cls_mode=None,
         pdnorm_bn=False,
         pdnorm_ln=False,
         pdnorm_decouple=True,
@@ -552,13 +551,6 @@ class PointTransformerV3(PointModule):
         pdnorm_conditions=("ScanNet", "S3DIS", "Structured3D"),
     ):
         super().__init__()
-        # Backward compatibility for older configs that still use cls_mode.
-        if cls_mode is not None:
-            if cls_mode != enc_mode:
-                raise ValueError(
-                    "PT-v3m1 got conflicting values for enc_mode and cls_mode."
-                )
-            enc_mode = cls_mode
         self.num_stages = len(enc_depths)
         self.order = [order] if isinstance(order, str) else order
         self.enc_mode = enc_mode
@@ -711,9 +703,6 @@ class PointTransformerV3(PointModule):
 
         point = self.embedding(point)
         point = self.enc(point)
-
-        encoder_features_tensor = point.feat
-
         if not self.enc_mode:
             point = self.dec(point)
         # else:
