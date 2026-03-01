@@ -9,7 +9,7 @@ batch_size = 4
 num_worker = 16
 mix_prob = 0.8
 empty_cache = False
-enable_amp = True
+enable_amp = False
 enable_wandb = False
 seed = 43244662
 
@@ -54,16 +54,13 @@ model = dict(
 
 # scheduler settings
 epoch = 800
-optimizer = dict(type="AdamW", lr=0.003, weight_decay=0.05)
+optimizer = dict(type="Adam", lr=0.001)
 scheduler = dict(
-    type="OneCycleLR",
-    max_lr=[0.003, 0.0003],
-    pct_start=0.05,
-    anneal_strategy="cos",
-    div_factor=10.0,
-    final_div_factor=1000.0,
+    type="CosineAfterStepLR",
+    step_start_rate=20 / epoch,
+    min_lr_scale=1e-3,
 )
-param_dicts = [dict(keyword="block", lr=0.0003)]
+param_dicts = None
 
 # dataset settings
 # NOTE: ScanNet200 boundary-only dataset class is not defined in current codebase.
@@ -86,32 +83,32 @@ data = dict(
             dict(type="CenterShift", apply_z=True),
             dict(type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2),
             dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.5),
-            dict(type="RandomRotate", angle=[-1 / 64, 1 / 64], axis="x", p=0.5),
             dict(type="RandomRotate", angle=[-1 / 64, 1 / 64], axis="y", p=0.5),
+            dict(type="RandomRotate", angle=[-1 / 64, 1 / 64], axis="x", p=0.5),
             dict(type="RandomScale", scale=[0.9, 1.1]),
             dict(type="RandomFlip", p=0.5),
             dict(type="RandomJitter", sigma=0.005, clip=0.02),
             dict(type="ElasticDistortion", distortion_params=[[0.2, 0.4], [0.8, 1.6]]),
             dict(type="ChromaticAutoContrast", p=0.2, blend_factor=None),
+            dict(type="ChromaticTranslation", p=0.95, ratio=0.05),
             dict(type="ChromaticJitter", p=0.95, std=0.05),
             dict(
                 type="GridSample",
-                grid_size=0.02,
+                grid_size=0.01,
                 hash_type="fnv",
                 mode="train",
-                return_grid_coord=True,
                 return_min_coord=True,
                 return_displacement=True,
                 project_displacement=True,
             ),
             dict(type="SphereCrop", sample_rate=1.0, mode="random"),
-            dict(type="SphereCrop", point_max=128000, mode="random"),
-            dict(type="CenterShift", apply_z=False),
-            dict(type="NormalizeColor"),
+            dict(type="SphereCrop", point_max=120000, mode="random"),
+            dict(type="CenterShift", apply_z=True),
+            dict(type="NormalizeColor", mode="minus_one_one"),
             dict(type="ToTensor"),
             dict(
                 type="Collect",
-                keys=("coord", "normal", "grid_coord", "segment", "boundary"),
+                keys=("coord", "normal", "segment", "boundary"),
                 feat_keys=("coord", "color", "normal", "displacement"),
             ),
         ],
@@ -127,21 +124,19 @@ data = dict(
             dict(type="Copy", keys_dict={"segment": "origin_segment"}),
             dict(
                 type="GridSample",
-                grid_size=0.02,
+                grid_size=0.01,
                 hash_type="fnv",
                 mode="train",
-                return_grid_coord=True,
                 return_min_coord=True,
                 return_displacement=True,
                 project_displacement=True,
                 return_inverse=True,
             ),
-            dict(type="CenterShift", apply_z=False),
-            dict(type="NormalizeColor"),
+            dict(type="NormalizeColor", mode="minus_one_one"),
             dict(type="ToTensor"),
             dict(
                 type="Collect",
-                keys=("coord", "normal", "grid_coord", "segment", "origin_segment", "inverse", "boundary"),
+                keys=("coord", "normal", "segment", "origin_segment", "inverse", "boundary"),
                 feat_keys=("coord", "color", "normal", "displacement"),
             ),
         ],
@@ -154,26 +149,25 @@ data = dict(
         boundary_root=boundary_root,
         transform=[
             dict(type="CenterShift", apply_z=True),
-            dict(type="NormalizeColor"),
+            dict(type="NormalizeColor", mode="minus_one_one"),
         ],
         test_mode=True,
         test_cfg=dict(
             voxelize=dict(
                 type="GridSample",
-                grid_size=0.02,
+                grid_size=0.01,
                 hash_type="fnv",
                 mode="test",
-                return_grid_coord=True,
                 return_displacement=True,
                 project_displacement=True,
             ),
             crop=None,
             post_transform=[
-                dict(type="CenterShift", apply_z=False),
+                dict(type="CenterShift", apply_z=True),
                 dict(type="ToTensor"),
                 dict(
                     type="Collect",
-                    keys=("coord", "normal", "grid_coord", "index", "boundary"),
+                    keys=("coord", "normal", "index", "boundary"),
                     feat_keys=("coord", "color", "normal", "displacement"),
                 ),
             ],

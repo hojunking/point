@@ -117,6 +117,35 @@ class CosineAnnealingLR(lr_scheduler.CosineAnnealingLR):
 
 
 @SCHEDULERS.register_module()
+class CosineAfterStepLR(lr_scheduler.LambdaLR):
+    def __init__(
+        self,
+        optimizer,
+        total_steps,
+        step_start_rate=0.05,
+        min_lr_scale=1e-3,
+        last_epoch=-1,
+    ):
+        assert 0 <= step_start_rate < 1
+        assert 0 < min_lr_scale <= 1
+        step_start = int(step_start_rate * total_steps)
+        cosine_steps = max(total_steps - step_start, 1)
+
+        def cosine_after_step(s):
+            if s < step_start:
+                return 1.0
+            progress = (s - step_start) / cosine_steps
+            progress = min(max(progress, 0.0), 1.0)
+            return min_lr_scale + 0.5 * (1 - min_lr_scale) * (1 + np.cos(np.pi * progress))
+
+        super().__init__(
+            optimizer=optimizer,
+            lr_lambda=cosine_after_step,
+            last_epoch=last_epoch,
+        )
+
+
+@SCHEDULERS.register_module()
 class OneCycleLR(lr_scheduler.OneCycleLR):
     r"""
     torch.optim.lr_scheduler.OneCycleLR, Block total_steps
