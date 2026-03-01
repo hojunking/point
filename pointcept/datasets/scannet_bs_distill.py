@@ -15,32 +15,37 @@ class ScanNetBSDistillDataset(ScanNetDataset):
                  boundary_root=None,
                  features_root=None,
                  **kwargs):
-        # 부모 클래스(ScanNetDataset)의 __init__을 먼저 호출합니다.
         super().__init__(**kwargs)
+        if not boundary_root:
+            raise ValueError(
+                "ScanNetBSDistillDataset requires `boundary_root` to be set. "
+                "Boundary labels must be provided explicitly."
+            )
         self.boundary_root = boundary_root
         self.features_root = features_root
 
     def get_data(self, idx):
-        # 1. 부모 클래스(ScanNetDataset)에서 기본 데이터 로드
-        #    (coord, color, normal, segment 등)
         data_dict = super().get_data(idx)
         scene_name = self.get_data_name(idx)
-        
-        # 2. Boundary 레이블 로드
-        logger = get_root_logger()
-        if self.boundary_root:
-            try:
-                boundary_path = os.path.join(self.boundary_root, self.split, scene_name, "boundary.npy")
-                data_dict['boundary'] = np.load(boundary_path).reshape(-1).astype(np.int32)
-            except FileNotFoundError:
-                logger.warning(f"Boundary file not found at {boundary_path}. Filling with zeros.")
-                data_dict['boundary'] = np.zeros(data_dict['coord'].shape[0], dtype=np.int32)
-        else:
-            # boundary_root가 config에 없으면 0으로 채움 + 경고
-            data_dict['boundary'] = np.zeros(data_dict['coord'].shape[0], dtype=np.int32)
-            logger.warning("boundary_root is empty. Filling boundary labels with zeros.")
 
-        # 3. Teacher가 사용할 Opacity 특징 로드
+        # Boundary labels are mandatory and must come from boundary_root.
+        logger = get_root_logger()
+        boundary_path = os.path.join(
+            self.boundary_root, self.split, scene_name, "boundary.npy"
+        )
+        if not os.path.exists(boundary_path):
+            raise FileNotFoundError(
+                f"Boundary file not found: {boundary_path}. "
+                "Set a valid boundary_root with scene-level boundary.npy files."
+            )
+        data_dict["boundary"] = np.load(boundary_path).reshape(-1).astype(np.int32)
+        if data_dict["boundary"].shape[0] != data_dict["coord"].shape[0]:
+            raise ValueError(
+                f"Boundary label length mismatch for {scene_name}: "
+                f"{data_dict['boundary'].shape[0]} vs {data_dict['coord'].shape[0]}"
+            )
+
+        # Teacher feature loading (optional)
         if self.features_root:
             try:
                 features_path = os.path.join(self.features_root, self.split, scene_name, "features.npy")
@@ -48,11 +53,16 @@ class ScanNetBSDistillDataset(ScanNetDataset):
                 # features.npy에서 opacity 데이터 추출 (scale(3), opacity(1) 순서 가정)
                 data_dict['features'] = all_features_3dgs[:, 3:4].astype(np.float32)
             except FileNotFoundError:
-                data_dict['features'] = np.zeros((data_dict['coord'].shape[0], 1), dtype=np.float32)
-                logger.warning(f"Features file not found at path, {self.features_root} Filling with zeros.")
+                if "features" in data_dict:
+                    logger.warning(
+                        f"Features file not found at {self.features_root}. Using features loaded from data_root."
+                    )
+                else:
+                    data_dict['features'] = np.zeros((data_dict['coord'].shape[0], 1), dtype=np.float32)
+                    logger.warning(f"Features file not found at path, {self.features_root} Filling with zeros.")
         else:
-            data_dict['features'] = np.zeros((data_dict['coord'].shape[0], 1), dtype=np.float32)
-            logger.warning(f"Features file not found at {self.features_root}. Filling with zeros.")
+            if "features" not in data_dict:
+                data_dict['features'] = np.zeros((data_dict['coord'].shape[0], 1), dtype=np.float32)
 
         return data_dict
 
@@ -72,8 +82,12 @@ class ScanNet200DatasetBSDistill(ScanNetDataset): # <--- ScanNetDataset을 직�
                  boundary_root=None,
                  features_root=None,
                  **kwargs):
-        # 부모 클래스(ScanNetDataset)의 __init__을 먼저 호출합니다.
         super().__init__(**kwargs)
+        if not boundary_root:
+            raise ValueError(
+                "ScanNet200DatasetBSDistill requires `boundary_root` to be set. "
+                "Boundary labels must be provided explicitly."
+            )
         self.boundary_root = boundary_root
         self.features_root = features_root
         
@@ -88,17 +102,21 @@ class ScanNet200DatasetBSDistill(ScanNetDataset): # <--- ScanNetDataset을 직�
         scene_name = self.get_data_name(idx)
         logger = get_root_logger()
 
-        # 2. Boundary 레이블 로드 (기존 로직과 동일)
-        if self.boundary_root:
-            try:
-                boundary_path = os.path.join(self.boundary_root, self.split, scene_name, "boundary.npy")
-                data_dict['boundary'] = np.load(boundary_path).reshape(-1).astype(np.int32)
-            except FileNotFoundError:
-                logger.warning(f"Boundary file not found at {boundary_path}. Filling with zeros.")
-                data_dict['boundary'] = np.zeros(data_dict['coord'].shape[0], dtype=np.int32)
-        else:
-            data_dict['boundary'] = np.zeros(data_dict['coord'].shape[0], dtype=np.int32)
-            logger.warning("boundary_root is empty. Filling boundary labels with zeros.")
+        # Boundary labels are mandatory and must come from boundary_root.
+        boundary_path = os.path.join(
+            self.boundary_root, self.split, scene_name, "boundary.npy"
+        )
+        if not os.path.exists(boundary_path):
+            raise FileNotFoundError(
+                f"Boundary file not found: {boundary_path}. "
+                "Set a valid boundary_root with scene-level boundary.npy files."
+            )
+        data_dict["boundary"] = np.load(boundary_path).reshape(-1).astype(np.int32)
+        if data_dict["boundary"].shape[0] != data_dict["coord"].shape[0]:
+            raise ValueError(
+                f"Boundary label length mismatch for {scene_name}: "
+                f"{data_dict['boundary'].shape[0]} vs {data_dict['coord'].shape[0]}"
+            )
 
         # 3. Teacher가 사용할 Opacity 특징 로드 (기존 로직과 동일)
         if self.features_root:
@@ -107,9 +125,15 @@ class ScanNet200DatasetBSDistill(ScanNetDataset): # <--- ScanNetDataset을 직�
                 all_features_3dgs = np.load(features_path)
                 data_dict['features'] = all_features_3dgs[:, 3:4].astype(np.float32)
             except FileNotFoundError:
-                data_dict['features'] = np.zeros((data_dict['coord'].shape[0], 1), dtype=np.float32)
-                logger.warning(f"Features file not found at {features_path}. Filling with zeros.")
+                if "features" in data_dict:
+                    logger.warning(
+                        f"Features file not found at {features_path}. Using features loaded from data_root."
+                    )
+                else:
+                    data_dict['features'] = np.zeros((data_dict['coord'].shape[0], 1), dtype=np.float32)
+                    logger.warning(f"Features file not found at {features_path}. Filling with zeros.")
         else:
-            data_dict['features'] = np.zeros((data_dict['coord'].shape[0], 1), dtype=np.float32)
+            if "features" not in data_dict:
+                data_dict['features'] = np.zeros((data_dict['coord'].shape[0], 1), dtype=np.float32)
 
         return data_dict

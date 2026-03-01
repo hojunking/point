@@ -285,7 +285,9 @@ class BoundarySemanticLoss(nn.Module):
         # BCE Loss (원본은 weight=weight_mask 사용)
         # 유효한 포인트만 추출하여 Loss를 계산하는 방식(valid_boundary_mask)을 사용합니다.
         
-        valid_boundary_mask_initial = (gt_boundary_label_unsqueeze != self.ignore_index).squeeze(-1)
+        valid_boundary_mask_initial = valid_semantic_mask & (
+            gt_boundary_label_unsqueeze.squeeze(-1) != self.ignore_index
+        )
         valid_initial_bou_logits = initial_bou_logits[valid_boundary_mask_initial]
         valid_gt_boundary_label_initial = gt_boundary_label_unsqueeze[valid_boundary_mask_initial]
 
@@ -306,7 +308,9 @@ class BoundarySemanticLoss(nn.Module):
         total_loss_final_semantic = final_sem_loss_ce + final_sem_loss_dice
 
         # --- 4. 최종 Boundary Loss (BFANet의 margin_score_v2) ---
-        valid_boundary_mask_final = (gt_boundary_label_unsqueeze != self.ignore_index).squeeze(-1)
+        valid_boundary_mask_final = valid_semantic_mask & (
+            gt_boundary_label_unsqueeze.squeeze(-1) != self.ignore_index
+        )
         valid_final_bou_logits = final_bou_logits[valid_boundary_mask_final]
         valid_gt_boundary_label_final = gt_boundary_label_unsqueeze[valid_boundary_mask_final]
 
@@ -406,7 +410,9 @@ class BSLossWithLovasz(nn.Module):
         total_loss_initial_semantic = initial_sem_loss_ce + initial_sem_loss_lovasz * self.lovasz_loss_weight
 
         # --- 2. 초기 Boundary Loss (BCE + Dice) ---
-        valid_boundary_mask_initial = (gt_boundary_label_unsqueeze != self.ignore_index).squeeze(-1)
+        valid_boundary_mask_initial = valid_semantic_mask & (
+            gt_boundary_label_unsqueeze.squeeze(-1) != self.ignore_index
+        )
         valid_initial_bou_logits = initial_bou_logits[valid_boundary_mask_initial]
         valid_gt_boundary_label_initial = gt_boundary_label_unsqueeze[valid_boundary_mask_initial]
         if valid_gt_boundary_label_initial.numel() > 0:
@@ -424,7 +430,9 @@ class BSLossWithLovasz(nn.Module):
         total_loss_final_semantic = final_sem_loss_ce + final_sem_loss_lovasz * self.lovasz_loss_weight
 
         # --- 4. 최종 Boundary Loss (BCE + Dice) ---
-        valid_boundary_mask_final = (gt_boundary_label_unsqueeze != self.ignore_index).squeeze(-1)
+        valid_boundary_mask_final = valid_semantic_mask & (
+            gt_boundary_label_unsqueeze.squeeze(-1) != self.ignore_index
+        )
         valid_final_bou_logits = final_bou_logits[valid_boundary_mask_final]
         valid_gt_boundary_label_final = gt_boundary_label_unsqueeze[valid_boundary_mask_final]
         if valid_gt_boundary_label_final.numel() > 0:

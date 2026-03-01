@@ -33,7 +33,7 @@ def index_operator(data_dict, index, duplicate=False):
             "segment",
             "instance",
            "features",
-           "boundary"
+           "boundary",
         ]
     if not duplicate:
         for key in data_dict["index_valid_keys"]:
@@ -137,9 +137,18 @@ class ToTensor(object):
 
 @TRANSFORMS.register_module()
 class NormalizeColor(object):
+    def __init__(self, mode="zero_one"):
+        # zero_one: [0, 255] -> [0, 1]
+        # minus_one_one: [0, 255] -> [-1, 1] (BFANet style)
+        assert mode in ["zero_one", "minus_one_one"]
+        self.mode = mode
+
     def __call__(self, data_dict):
         if "color" in data_dict.keys():
-            data_dict["color"] = data_dict["color"] / 255
+            if self.mode == "zero_one":
+                data_dict["color"] = data_dict["color"] / 255
+            else:
+                data_dict["color"] = data_dict["color"] / 127.5 - 1
         return data_dict
 
 
