@@ -690,7 +690,7 @@ class PointTransformerV3BSBlock(PointModule):
         enable_flash=True,
         upcast_attention=False,
         upcast_softmax=False,
-        cls_mode=False,
+        enc_mode=False,
         pdnorm_bn=False,
         pdnorm_ln=False,
         pdnorm_decouple=True,
@@ -704,7 +704,7 @@ class PointTransformerV3BSBlock(PointModule):
         super().__init__()
         self.num_stages = len(enc_depths)
         self.order = [order] if isinstance(order, str) else order
-        self.cls_mode = cls_mode
+        self.enc_mode = enc_mode
         self.shuffle_orders = shuffle_orders
 
         assert self.num_stages == len(stride) + 1
@@ -712,10 +712,10 @@ class PointTransformerV3BSBlock(PointModule):
         assert self.num_stages == len(enc_channels)
         assert self.num_stages == len(enc_num_head)
         assert self.num_stages == len(enc_patch_size)
-        assert self.cls_mode or self.num_stages == len(dec_depths) + 1
-        assert self.cls_mode or self.num_stages == len(dec_channels) + 1
-        assert self.cls_mode or self.num_stages == len(dec_num_head) + 1
-        assert self.cls_mode or self.num_stages == len(dec_patch_size) + 1
+        assert self.enc_mode or self.num_stages == len(dec_depths) + 1
+        assert self.enc_mode or self.num_stages == len(dec_channels) + 1
+        assert self.enc_mode or self.num_stages == len(dec_num_head) + 1
+        assert self.enc_mode or self.num_stages == len(dec_patch_size) + 1
 
         # norm layers
         if pdnorm_bn:
@@ -799,7 +799,7 @@ class PointTransformerV3BSBlock(PointModule):
                 self.enc.add(module=enc, name=f"enc{s}")
 
         # decoder
-        if not self.cls_mode:
+        if not self.enc_mode:
             dec_drop_path = [
                 x.item() for x in torch.linspace(0, drop_path, sum(dec_depths))
             ]
@@ -861,7 +861,7 @@ class PointTransformerV3BSBlock(PointModule):
 
         encoder_features_tensor  = point.feat
 
-        if not self.cls_mode:
+        if not self.enc_mode:
             point = self.dec(point)
         # else:
         #     point.feat = torch_scatter.segment_csr(
