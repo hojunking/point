@@ -206,7 +206,7 @@ class SerializedAttention(PointModule):
             feat = (attn @ v).transpose(1, 2).reshape(-1, C)
         else:
             feat = flash_attn.flash_attn_varlen_qkvpacked_func(
-                qkv.half().reshape(-1, 3, H, C // H),
+                qkv.to(torch.bfloat16).reshape(-1, 3, H, C // H),
                 cu_seqlens,
                 max_seqlen=self.patch_size,
                 dropout_p=self.attn_drop if self.training else 0,
@@ -542,7 +542,8 @@ class PointTransformerV3(PointModule):
         enable_flash=True,
         upcast_attention=False,
         upcast_softmax=False,
-        cls_mode=False,
+        enc_mode=False,
+        cls_mode=None,
         pdnorm_bn=False,
         pdnorm_ln=False,
         pdnorm_decouple=True,
@@ -551,9 +552,16 @@ class PointTransformerV3(PointModule):
         pdnorm_conditions=("ScanNet", "S3DIS", "Structured3D"),
     ):
         super().__init__()
+        # Backward compatibility for older configs that still use cls_mode.
+        if cls_mode is not None:
+            if cls_mode != enc_mode:
+                raise ValueError(
+                    "PT-v3m1 got conflicting values for enc_mode and cls_mode."
+                )
+            enc_mode = cls_mode
         self.num_stages = len(enc_depths)
         self.order = [order] if isinstance(order, str) else order
-        self.cls_mode = cls_mode
+        self.enc_mode = enc_mode
         self.shuffle_orders = shuffle_orders
 
         assert self.num_stages == len(stride) + 1
@@ -561,10 +569,10 @@ class PointTransformerV3(PointModule):
         assert self.num_stages == len(enc_channels)
         assert self.num_stages == len(enc_num_head)
         assert self.num_stages == len(enc_patch_size)
-        assert self.cls_mode or self.num_stages == len(dec_depths) + 1
-        assert self.cls_mode or self.num_stages == len(dec_channels) + 1
-        assert self.cls_mode or self.num_stages == len(dec_num_head) + 1
-        assert self.cls_mode or self.num_stages == len(dec_patch_size) + 1
+        assert self.enc_mode or self.num_stages == len(dec_depths) + 1
+        assert self.enc_mode or self.num_stages == len(dec_channels) + 1
+        assert self.enc_mode or self.num_stages == len(dec_num_head) + 1
+        assert self.enc_mode or self.num_stages == len(dec_patch_size) + 1
 
         # norm layers
         if pdnorm_bn:
@@ -648,7 +656,7 @@ class PointTransformerV3(PointModule):
                 self.enc.add(module=enc, name=f"enc{s}")
 
         # decoder
-        if not self.cls_mode:
+        if not self.enc_mode:
             dec_drop_path = [
                 x.item() for x in torch.linspace(0, drop_path, sum(dec_depths))
             ]
@@ -703,11 +711,10 @@ class PointTransformerV3(PointModule):
 
         point = self.embedding(point)
         point = self.enc(point)
-        
-        encoder_features_tensor  = point.feat
-        
 
-        if not self.cls_mode:
+        encoder_features_tensor = point.feat
+
+        if not self.enc_mode:
             point = self.dec(point)
         # else:
         #     point.feat = torch_scatter.segment_csr(
@@ -715,4 +722,4 @@ class PointTransformerV3(PointModule):
         #         indptr=nn.functional.pad(point.offset, (1, 0)),
         #         reduce="mean",
         #     )
-        return point 
+        return point
