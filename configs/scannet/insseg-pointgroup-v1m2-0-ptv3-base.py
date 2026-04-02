@@ -1,8 +1,8 @@
 _base_ = ["../_base_/default_runtime.py"]
 
 # misc custom setting
-batch_size = 12  # bs: total bs in all gpus
-num_worker = 12
+batch_size = 2  # bs: total bs in all gpus
+num_worker = 16
 mix_prob = 0
 empty_cache = False
 enable_amp = True
@@ -207,6 +207,7 @@ data = dict(
                     "origin_instance",
                     "instance_centroid",
                     "bbox",
+                    "name",
                 ),
                 feat_keys=("color", "normal"),
                 offset_keys_dict=dict(offset="coord", origin_offset="origin_coord"),

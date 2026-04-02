@@ -53,7 +53,7 @@ model = dict(
 )
 
 # scheduler settings
-epoch = 800
+epoch = 400
 optimizer = dict(type="Adam", lr=0.001)
 scheduler = dict(
     type="CosineAfterStepLR",

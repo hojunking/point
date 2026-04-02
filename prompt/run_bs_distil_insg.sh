@@ -3,16 +3,16 @@
 
 FEATURES_FLAG_COMBOS=(
   "opacity"
-  "scale"
-  "scale_opacity"
-  "scale_opacity_sh1"
+  # "scale"
+  # "scale_opacity"
+  # "scale_opacity_sh1"
 )
 
 declare -A TEACHER_CKPT_BY_COMBO=(
   ["opacity"]="pre_trained/sonata_opacity_k20_400epoch_loss060.pth"
-  ["scale"]="pre_trained/sonata_scale_k20_400epoch_scannet.pth"
-  ["scale_opacity"]="pre_trained/sonata_scale-opacity_k20_400epoch_scannet.pth"
-  ["scale_opacity_sh1"]="pre_trained/sonata_scale-opacity-sh1_k20_400epoch_scannet.pth"
+  # ["scale"]="pre_trained/sonata_scale_k20_400epoch_scannet.pth"
+  # ["scale_opacity"]="pre_trained/sonata_scale-opacity_k20_400epoch_scannet.pth"
+  # ["scale_opacity_sh1"]="pre_trained/sonata_scale-opacity-sh1_k20_400epoch_scannet.pth"
 )
 
 for COMBO in "${FEATURES_FLAG_COMBOS[@]}"; do
@@ -66,13 +66,13 @@ for COMBO in "${FEATURES_FLAG_COMBOS[@]}"; do
   fi
 
   TEACHER_IN_CHANNELS=$((3 + FEATURES_DIM))
-  EXP_NAME="insseg_pg-v1m4_bs-distill-${COMBO}"
+  EXP_NAME="insseg_pg-v1m4_bs-distill-${COMBO}_lr6_local"
   TEACHER_CKPT="${TEACHER_CKPT_BY_COMBO[$COMBO]}"
 
   export EXTRA_OPTIONS="model.teacher_backbone.in_channels=$TEACHER_IN_CHANNELS"
   EXTRA_OPTIONS="$EXTRA_OPTIONS model.teacher_backbone.checkpoint_path=$TEACHER_CKPT"
-  EXTRA_OPTIONS="$EXTRA_OPTIONS data.train.features_flag=$FEATURES_LIST data.val.features_flag=$FEATURES_LIST data.test.features_flag=$FEATURES_LIST"
-  EXTRA_OPTIONS="$EXTRA_OPTIONS data.train.sh_degree=$SH_DEGREE data.val.sh_degree=$SH_DEGREE data.test.sh_degree=$SH_DEGREE"
+  #EXTRA_OPTIONS="$EXTRA_OPTIONS data.train.features_flag=$FEATURES_LIST data.val.features_flag=$FEATURES_LIST data.test.features_flag=$FEATURES_LIST"
+  #EXTRA_OPTIONS="$EXTRA_OPTIONS data.train.sh_degree=$SH_DEGREE data.val.sh_degree=$SH_DEGREE data.test.sh_degree=$SH_DEGREE"
 
   echo "=================================================="
   echo "Experiment name: $EXP_NAME"
@@ -81,11 +81,11 @@ for COMBO in "${FEATURES_FLAG_COMBOS[@]}"; do
 
   sh scripts/train.sh \
     -g 1 \
-    -d scannet \
+    -d scannet200 \
     -n "$EXP_NAME" \
     -r false \
     -c insseg-pointgroup-v1m4-0-ptv3-bs-distill
 
   LOG_PATH="exp/scannet/${EXP_NAME}/train.log"
-  python3 ./gspread/gspread_results.py "$LOG_PATH" "$EXP_NAME" sample100_test
+  python3 ./gspread/gspread_results_insseg.py "$LOG_PATH" "$EXP_NAME" sample100_test
 done
