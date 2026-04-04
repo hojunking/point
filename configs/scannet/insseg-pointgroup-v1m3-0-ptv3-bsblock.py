@@ -80,6 +80,7 @@ model = dict(
         ),
     ),
     backbone_out_channels=64,
+    semantic_head_in_channels=128,
     semantic_num_classes=num_classes,
     semantic_ignore_index=-1,
     segment_ignore_index=segment_ignore_index,
@@ -88,6 +89,7 @@ model = dict(
     cluster_closed_points=300,
     cluster_propose_points=100,
     cluster_min_points=50,
+    boundary_loss_weight=0.2,
     criteria=[
         dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=-1),
         dict(
@@ -96,17 +98,6 @@ model = dict(
             loss_weight=1.0,
             ignore_index=-1,
         ),
-    ],
-    criteria_bs=[
-        dict(
-            type="BSLossWithLovasz",
-            semantic_loss_weight=0.5,
-            boundary_loss_weight=0.2,
-            lovasz_loss_weight=1.0,
-            ignore_index=-1,
-            num_semantic_classes=num_classes,
-            semantic_boundary_weight_factor=9.0,
-        )
     ],
 )
 

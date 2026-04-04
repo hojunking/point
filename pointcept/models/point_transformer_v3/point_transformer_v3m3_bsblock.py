@@ -655,6 +655,7 @@ class BSBlock(PointModule): # PointModule을 상속받아 PointSequential 내에
         final_bou_logits = self.final_boundary_head(margin_out_fused)
 
         # Update Point object: point.feat for semantic head, and add boundary_pred_logits
+        point.final_semantic_feat = sem_out_fused
         point.initial_semantic_logits = initial_sem_logits
         point.initial_boundary_logits = initial_bou_logits
         point.final_semantic_logits = final_sem_logits
@@ -873,4 +874,3 @@ class PointTransformerV3BSBlock(PointModule):
             point = self.bfanet_block(point) # point.feat와 point.boundary_pred_logits가 업데이트됨
         #print(point)
         return point
-

@@ -218,6 +218,8 @@ class PointGroupV1M3(nn.Module):
         voxel_size=0.02,
         criteria=None,
         criteria_bs=None,
+        semantic_head_in_channels=None,
+        boundary_loss_weight=0.1,
         freeze_backbone=False,
     ):
         super().__init__()
@@ -232,19 +234,32 @@ class PointGroupV1M3(nn.Module):
         self.cluster_min_points = cluster_min_points
         self.voxel_size = voxel_size
         self.backbone = build_model(backbone)
+        if semantic_head_in_channels is None:
+            semantic_head_in_channels = backbone_out_channels
         self.bias_head = nn.Sequential(
             nn.Linear(backbone_out_channels, backbone_out_channels),
             norm_fn(backbone_out_channels),
             nn.ReLU(),
             nn.Linear(backbone_out_channels, 3),
         )
+        self.seg_head = nn.Linear(semantic_head_in_channels, semantic_num_classes)
         # keep for compatibility/fallback config parity with PG-v1m2
         self.seg_criteria = build_criteria(criteria)
-        self.bs_criteria = build_criteria_bs(criteria_bs)
+        self.bs_criteria = build_criteria_bs(criteria_bs) if criteria_bs is not None else None
+        self.boundary_loss_weight = boundary_loss_weight
         self.freeze_backbone = freeze_backbone
         if self.freeze_backbone:
             for p in self.backbone.parameters():
                 p.requires_grad = False
+
+    @staticmethod
+    def _binary_dice_loss(logits, target, smooth=1e-5):
+        pred_prob = torch.sigmoid(logits)
+        target = target.float()
+        intersection = (pred_prob * target).sum()
+        union = pred_prob.pow(2).sum() + target.pow(2).sum()
+        dice = (2.0 * intersection + smooth) / (union + smooth)
+        return 1.0 - dice
 
     def forward(self, data_dict, return_point=False):
         if return_point:
@@ -269,12 +284,7 @@ class PointGroupV1M3(nn.Module):
                 "Use PT-v3m3 bsblock backbone that returns Point with BS logits."
             )
 
-        required_logits = (
-            "initial_semantic_logits",
-            "initial_boundary_logits",
-            "final_semantic_logits",
-            "final_boundary_logits",
-        )
+        required_logits = ("final_boundary_logits", "final_semantic_feat")
         missing_logits = [name for name in required_logits if not hasattr(point, name)]
         if len(missing_logits) > 0:
             raise RuntimeError(
@@ -287,18 +297,40 @@ class PointGroupV1M3(nn.Module):
             )
 
         bias_pred = self.bias_head(feat)
-        logit_pred = point.final_semantic_logits
+        logit_pred = self.seg_head(point.final_semantic_feat)
 
         if "segment" in data_dict.keys() and "instance" in data_dict.keys():
             segment = data_dict["segment"]
             instance = data_dict["instance"]
-            bs_loss_dict = self.bs_criteria(
-                initial_sem_logits=point.initial_semantic_logits,
-                initial_bou_logits=point.initial_boundary_logits,
-                final_sem_logits=point.final_semantic_logits,
-                final_bou_logits=point.final_boundary_logits,
-                gt_semantic_label=segment,
-                gt_boundary_label=data_dict["boundary"],
+            seg_loss = self.seg_criteria(logit_pred, segment)
+
+            final_boundary_logits = point.final_boundary_logits
+            if final_boundary_logits.dim() == 1:
+                final_boundary_logits = final_boundary_logits.unsqueeze(-1)
+
+            gt_boundary = data_dict["boundary"]
+            if gt_boundary.dim() == 1:
+                gt_boundary = gt_boundary.unsqueeze(-1)
+            gt_boundary = gt_boundary.float()
+
+            valid_boundary_mask = (segment != self.semantic_ignore_index).unsqueeze(-1)
+            valid_boundary_mask = valid_boundary_mask & (
+                gt_boundary != self.semantic_ignore_index
+            )
+            valid_final_boundary_logits = final_boundary_logits[valid_boundary_mask]
+            valid_gt_boundary = gt_boundary[valid_boundary_mask]
+            if valid_gt_boundary.numel() > 0:
+                final_boundary_bce_loss = F.binary_cross_entropy_with_logits(
+                    valid_final_boundary_logits, valid_gt_boundary
+                )
+                final_boundary_dice_loss = self._binary_dice_loss(
+                    valid_final_boundary_logits, valid_gt_boundary
+                )
+                final_boundary_loss = final_boundary_bce_loss + final_boundary_dice_loss
+            else:
+                final_boundary_loss = final_boundary_logits.new_tensor(0.0)
+            weighted_final_boundary_loss = (
+                final_boundary_loss * self.boundary_loss_weight
             )
 
             mask = (instance != self.instance_ignore_index).float()
@@ -317,15 +349,19 @@ class PointGroupV1M3(nn.Module):
                 torch.sum(mask) + 1e-8
             )
 
-            loss = bs_loss_dict["loss"] + bias_l1_loss + bias_cosine_loss
+            loss = (
+                seg_loss
+                + weighted_final_boundary_loss
+                + bias_l1_loss
+                + bias_cosine_loss
+            )
             return_dict = dict(
                 loss=loss,
+                seg_loss=seg_loss,
+                loss_final_boundary=weighted_final_boundary_loss,
+                loss_final_boundary_raw=final_boundary_loss,
                 bias_l1_loss=bias_l1_loss,
                 bias_cosine_loss=bias_cosine_loss,
-                loss_initial_semantic=bs_loss_dict.get("loss_initial_semantic"),
-                loss_initial_boundary=bs_loss_dict.get("loss_initial_boundary"),
-                loss_final_semantic=bs_loss_dict.get("loss_final_semantic"),
-                loss_final_boundary=bs_loss_dict.get("loss_final_boundary"),
             )
         else:
             # skip for test split
@@ -406,7 +442,12 @@ class PointGroupV1M3(nn.Module):
                 pred_scores = torch.tensor([])
                 pred_classes = torch.tensor([])
 
-            return_dict["seg_logits"] = point.final_semantic_logits
+            return_dict["seg_logits"] = logit_pred
+            return_dict["bs_final_semantic_logits"] = (
+                point.final_semantic_logits
+                if hasattr(point, "final_semantic_logits")
+                else None
+            )
             return_dict["boundary_logits"] = point.final_boundary_logits
             return_dict["pred_scores"] = pred_scores
             return_dict["pred_masks"] = pred_masks
