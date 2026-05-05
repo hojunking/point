@@ -16,7 +16,7 @@ model = dict(
     backbone_out_channels=96,
     backbone=dict(
         type="SpUNet-v1m1-BS",
-        in_channels=7,
+        in_channels=6,
         num_classes=20,
         channels=(32, 64, 128, 256, 256, 128, 96, 96),
         layers=(2, 3, 4, 6, 2, 2, 2, 2),
@@ -119,7 +119,7 @@ data = dict(
             dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "boundary"),
-                feat_keys=("color", "normal", "features"),
+                feat_keys=("color", "normal"),
             ),
         ],
         test_mode=False,
@@ -144,7 +144,7 @@ data = dict(
             dict(
                 type="Collect",
                 keys=("coord", "grid_coord", "segment", "boundary"),
-                feat_keys=("color", "normal", "features"),
+                feat_keys=("color", "normal"),
             ),
         ],
         test_mode=False,
@@ -174,7 +174,7 @@ data = dict(
                 dict(
                     type="Collect",
                     keys=("coord", "grid_coord", "index", "boundary"),
-                    feat_keys=("color", "normal", "features"),
+                    feat_keys=("color", "normal"),
                 ),
             ],
             aug_transform=[
