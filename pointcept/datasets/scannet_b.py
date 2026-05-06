@@ -51,21 +51,20 @@ class ScanNetDatasetBoundary(ScanNetDataset):
         # ScanNetDataset의 get_data 로직을 호출하여 기본 데이터 로드
         data_dict = super().get_data(idx)
 
-        scene_name = self.get_data_name(idx) 
+        scene_name = self.get_data_name(idx)
+        logger = get_root_logger()
         # 2. Boundary 레이블 로드
         if self.boundary_root:
             try:
                 boundary_path = os.path.join(self.boundary_root, self.split, scene_name, "boundary.npy")
                 data_dict['boundary'] = np.load(boundary_path).reshape(-1).astype(np.int32)
             except FileNotFoundError:
-                logger = get_root_logger()
                 logger.warning(f"Boundary file not found at {boundary_path}. Filling with zeros.")
                 data_dict['boundary'] = np.zeros(data_dict['coord'].shape[0], dtype=np.int32)
         else:
             # boundary_root가 config에 없으면 0으로 채움
             data_dict['boundary'] = np.zeros(data_dict['coord'].shape[0], dtype=np.int32)
-            logger = get_root_logger()
-            logger.warning(f"Boundary root not found at {boundary_path}. Filling with zeros.")
+            logger.warning(f"Boundary root is not set for {scene_name}. Filling with zeros.")
         
         if self.features_root is not None and len(self.features_flag) > 0:
             features_file_path = os.path.join(self.features_root, self.split, scene_name, "features.npy")
