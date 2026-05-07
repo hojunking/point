@@ -1,2 +1,5 @@
 from .octformer_v1m1_base import OctFormer
 from .octformer_v1m2_bfa_bs import OctFormerBS
+from .octformer_v1m2_bfanet_repro import OctFormerBFANet
+from .octformer_v1m2_bsblock import OctFormerBSBlock
+from .octformer_v1m3_bfa_bs_insseg import OctFormerBSInsSeg

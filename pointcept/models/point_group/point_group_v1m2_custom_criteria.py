@@ -218,6 +218,8 @@ class PointGroupV1M3(nn.Module):
         voxel_size=0.02,
         criteria=None,
         criteria_bs=None,
+        semantic_head_in_channels=None,
+        boundary_loss_weight=0.1,
         freeze_backbone=False,
     ):
         super().__init__()
@@ -232,19 +234,32 @@ class PointGroupV1M3(nn.Module):
         self.cluster_min_points = cluster_min_points
         self.voxel_size = voxel_size
         self.backbone = build_model(backbone)
+        if semantic_head_in_channels is None:
+            semantic_head_in_channels = backbone_out_channels
         self.bias_head = nn.Sequential(
             nn.Linear(backbone_out_channels, backbone_out_channels),
             norm_fn(backbone_out_channels),
             nn.ReLU(),
             nn.Linear(backbone_out_channels, 3),
         )
+        self.seg_head = nn.Linear(semantic_head_in_channels, semantic_num_classes)
         # keep for compatibility/fallback config parity with PG-v1m2
         self.seg_criteria = build_criteria(criteria)
-        self.bs_criteria = build_criteria_bs(criteria_bs)
+        self.bs_criteria = build_criteria_bs(criteria_bs) if criteria_bs is not None else None
+        self.boundary_loss_weight = boundary_loss_weight
         self.freeze_backbone = freeze_backbone
         if self.freeze_backbone:
             for p in self.backbone.parameters():
                 p.requires_grad = False
+
+    @staticmethod
+    def _binary_dice_loss(logits, target, smooth=1e-5):
+        pred_prob = torch.sigmoid(logits)
+        target = target.float()
+        intersection = (pred_prob * target).sum()
+        union = pred_prob.pow(2).sum() + target.pow(2).sum()
+        dice = (2.0 * intersection + smooth) / (union + smooth)
+        return 1.0 - dice
 
     def forward(self, data_dict, return_point=False):
         if return_point:
@@ -269,12 +284,7 @@ class PointGroupV1M3(nn.Module):
                 "Use PT-v3m3 bsblock backbone that returns Point with BS logits."
             )
 
-        required_logits = (
-            "initial_semantic_logits",
-            "initial_boundary_logits",
-            "final_semantic_logits",
-            "final_boundary_logits",
-        )
+        required_logits = ("final_boundary_logits", "final_semantic_feat")
         missing_logits = [name for name in required_logits if not hasattr(point, name)]
         if len(missing_logits) > 0:
             raise RuntimeError(
@@ -287,18 +297,40 @@ class PointGroupV1M3(nn.Module):
             )
 
         bias_pred = self.bias_head(feat)
-        logit_pred = point.final_semantic_logits
+        logit_pred = self.seg_head(point.final_semantic_feat)
 
         if "segment" in data_dict.keys() and "instance" in data_dict.keys():
             segment = data_dict["segment"]
             instance = data_dict["instance"]
-            bs_loss_dict = self.bs_criteria(
-                initial_sem_logits=point.initial_semantic_logits,
-                initial_bou_logits=point.initial_boundary_logits,
-                final_sem_logits=point.final_semantic_logits,
-                final_bou_logits=point.final_boundary_logits,
-                gt_semantic_label=segment,
-                gt_boundary_label=data_dict["boundary"],
+            seg_loss = self.seg_criteria(logit_pred, segment)
+
+            final_boundary_logits = point.final_boundary_logits
+            if final_boundary_logits.dim() == 1:
+                final_boundary_logits = final_boundary_logits.unsqueeze(-1)
+
+            gt_boundary = data_dict["boundary"]
+            if gt_boundary.dim() == 1:
+                gt_boundary = gt_boundary.unsqueeze(-1)
+            gt_boundary = gt_boundary.float()
+
+            valid_boundary_mask = (segment != self.semantic_ignore_index).unsqueeze(-1)
+            valid_boundary_mask = valid_boundary_mask & (
+                gt_boundary != self.semantic_ignore_index
+            )
+            valid_final_boundary_logits = final_boundary_logits[valid_boundary_mask]
+            valid_gt_boundary = gt_boundary[valid_boundary_mask]
+            if valid_gt_boundary.numel() > 0:
+                final_boundary_bce_loss = F.binary_cross_entropy_with_logits(
+                    valid_final_boundary_logits, valid_gt_boundary
+                )
+                final_boundary_dice_loss = self._binary_dice_loss(
+                    valid_final_boundary_logits, valid_gt_boundary
+                )
+                final_boundary_loss = final_boundary_bce_loss + final_boundary_dice_loss
+            else:
+                final_boundary_loss = final_boundary_logits.new_tensor(0.0)
+            weighted_final_boundary_loss = (
+                final_boundary_loss * self.boundary_loss_weight
             )
 
             mask = (instance != self.instance_ignore_index).float()
@@ -317,15 +349,19 @@ class PointGroupV1M3(nn.Module):
                 torch.sum(mask) + 1e-8
             )
 
-            loss = bs_loss_dict["loss"] + bias_l1_loss + bias_cosine_loss
+            loss = (
+                seg_loss
+                + weighted_final_boundary_loss
+                + bias_l1_loss
+                + bias_cosine_loss
+            )
             return_dict = dict(
                 loss=loss,
+                seg_loss=seg_loss,
+                loss_final_boundary=weighted_final_boundary_loss,
+                loss_final_boundary_raw=final_boundary_loss,
                 bias_l1_loss=bias_l1_loss,
                 bias_cosine_loss=bias_cosine_loss,
-                loss_initial_semantic=bs_loss_dict.get("loss_initial_semantic"),
-                loss_initial_boundary=bs_loss_dict.get("loss_initial_boundary"),
-                loss_final_semantic=bs_loss_dict.get("loss_final_semantic"),
-                loss_final_boundary=bs_loss_dict.get("loss_final_boundary"),
             )
         else:
             # skip for test split
@@ -406,7 +442,12 @@ class PointGroupV1M3(nn.Module):
                 pred_scores = torch.tensor([])
                 pred_classes = torch.tensor([])
 
-            return_dict["seg_logits"] = point.final_semantic_logits
+            return_dict["seg_logits"] = logit_pred
+            return_dict["bs_final_semantic_logits"] = (
+                point.final_semantic_logits
+                if hasattr(point, "final_semantic_logits")
+                else None
+            )
             return_dict["boundary_logits"] = point.final_boundary_logits
             return_dict["pred_scores"] = pred_scores
             return_dict["pred_masks"] = pred_masks
@@ -678,4 +719,265 @@ class PointGroupV1M4(nn.Module):
             return_dict["pred_scores"] = pred_scores
             return_dict["pred_masks"] = pred_masks
             return_dict["pred_classes"] = pred_classes
+        return return_dict
+
+
+@MODELS.register_module("PG-v1m5")
+class PointGroupV1M5(nn.Module):
+    def __init__(
+        self,
+        backbone,
+        backbone_out_channels=64,
+        semantic_num_classes=20,
+        semantic_ignore_index=-1,
+        segment_ignore_index=(-1, 0, 1),
+        instance_ignore_index=-1,
+        cluster_thresh=1.5,
+        cluster_closed_points=300,
+        cluster_propose_points=100,
+        cluster_min_points=50,
+        voxel_size=0.02,
+        criteria=None,
+        criteria_bs=None,
+        freeze_backbone=False,
+    ):
+        super().__init__()
+        norm_fn = partial(nn.BatchNorm1d, eps=1e-3, momentum=0.01)
+        self.semantic_num_classes = semantic_num_classes
+        self.segment_ignore_index = segment_ignore_index
+        self.semantic_ignore_index = semantic_ignore_index
+        self.instance_ignore_index = instance_ignore_index
+        self.cluster_thresh = cluster_thresh
+        self.cluster_closed_points = cluster_closed_points
+        self.cluster_propose_points = cluster_propose_points
+        self.cluster_min_points = cluster_min_points
+        self.voxel_size = voxel_size
+        self.backbone = build_model(backbone)
+        self.bias_head = nn.Sequential(
+            nn.Linear(backbone_out_channels, backbone_out_channels),
+            norm_fn(backbone_out_channels),
+            nn.ReLU(),
+            nn.Linear(backbone_out_channels, 3),
+        )
+        # keep for compatibility/fallback config parity
+        self.seg_criteria = build_criteria(criteria)
+        self.bs_criteria = build_criteria_bs(criteria_bs)
+        self.freeze_backbone = freeze_backbone
+        if self.freeze_backbone:
+            for p in self.backbone.parameters():
+                p.requires_grad = False
+
+    def _parse_backbone_output(self, output):
+        if isinstance(output, Point):
+            while "pooling_parent" in output.keys():
+                assert "pooling_inverse" in output.keys()
+                parent = output.pop("pooling_parent")
+                inverse = output.pop("pooling_inverse")
+                parent.feat = torch.cat([parent.feat, output.feat[inverse]], dim=-1)
+                output = parent
+            required = (
+                "initial_semantic_logits",
+                "initial_boundary_logits",
+                "final_semantic_logits",
+                "final_boundary_logits",
+            )
+            missing = [k for k in required if not hasattr(output, k)]
+            if len(missing) > 0:
+                raise RuntimeError(
+                    "PG-v1m5 Point output missing BS logits. "
+                    f"Missing attributes: {missing}"
+                )
+            return (
+                output.feat,
+                output.initial_semantic_logits,
+                output.initial_boundary_logits,
+                output.final_semantic_logits,
+                output.final_boundary_logits,
+            )
+
+        if isinstance(output, dict):
+            required = (
+                "feat",
+                "initial_semantic_logits",
+                "initial_boundary_logits",
+                "final_semantic_logits",
+                "final_boundary_logits",
+            )
+            missing = [k for k in required if k not in output]
+            if len(missing) > 0:
+                raise RuntimeError(
+                    "PG-v1m5 expects OctFormer-v1m3-BS-InsSeg dict output with BS logits. "
+                    f"Missing keys: {missing}"
+                )
+            return (
+                output["feat"],
+                output["initial_semantic_logits"],
+                output["initial_boundary_logits"],
+                output["final_semantic_logits"],
+                output["final_boundary_logits"],
+            )
+
+        raise TypeError(
+            "PG-v1m5 expects backbone output as Point or dict from OctFormer-v1m3-BS-InsSeg."
+        )
+
+    def forward(self, data_dict, return_point=False):
+        if return_point:
+            return dict(point=self.backbone(data_dict))
+
+        coord = data_dict["coord"]
+        instance_centroid = data_dict["instance_centroid"]
+        offset = data_dict["offset"]
+
+        if "boundary" not in data_dict:
+            raise KeyError(
+                "PG-v1m5 requires input_dict['boundary'] for boundary supervision."
+            )
+
+        backbone_output = self.backbone(data_dict)
+        (
+            feat,
+            initial_sem_logits,
+            initial_bou_logits,
+            final_sem_logits,
+            final_bou_logits,
+        ) = self._parse_backbone_output(backbone_output)
+        n_points = coord.shape[0]
+        if (
+            feat.shape[0] != n_points
+            or initial_sem_logits.shape[0] != n_points
+            or initial_bou_logits.shape[0] != n_points
+            or final_sem_logits.shape[0] != n_points
+            or final_bou_logits.shape[0] != n_points
+        ):
+            raise RuntimeError(
+                "PG-v1m5 requires point-wise aligned outputs from backbone. "
+                f"Expected first dim {n_points}, got "
+                f"feat={feat.shape[0]}, init_sem={initial_sem_logits.shape[0]}, "
+                f"init_bou={initial_bou_logits.shape[0]}, final_sem={final_sem_logits.shape[0]}, "
+                f"final_bou={final_bou_logits.shape[0]}"
+            )
+
+        bias_pred = self.bias_head(feat)
+        logit_pred = final_sem_logits
+
+        if "segment" in data_dict.keys() and "instance" in data_dict.keys():
+            segment = data_dict["segment"]
+            instance = data_dict["instance"]
+            bs_loss_dict = self.bs_criteria(
+                initial_sem_logits=initial_sem_logits,
+                initial_bou_logits=initial_bou_logits,
+                final_sem_logits=final_sem_logits,
+                final_bou_logits=final_bou_logits,
+                gt_semantic_label=segment,
+                gt_boundary_label=data_dict["boundary"],
+            )
+
+            mask = (instance != self.instance_ignore_index).float()
+            bias_gt = instance_centroid - coord
+            bias_dist = torch.sum(torch.abs(bias_pred - bias_gt), dim=-1)
+            bias_l1_loss = torch.sum(bias_dist * mask) / (torch.sum(mask) + 1e-8)
+
+            bias_pred_norm = bias_pred / (
+                torch.norm(bias_pred, p=2, dim=1, keepdim=True) + 1e-8
+            )
+            bias_gt_norm = bias_gt / (
+                torch.norm(bias_gt, p=2, dim=1, keepdim=True) + 1e-8
+            )
+            cosine_similarity = -(bias_pred_norm * bias_gt_norm).sum(-1)
+            bias_cosine_loss = torch.sum(cosine_similarity * mask) / (
+                torch.sum(mask) + 1e-8
+            )
+
+            loss = bs_loss_dict["loss"] + bias_l1_loss + bias_cosine_loss
+            return_dict = dict(
+                loss=loss,
+                bias_l1_loss=bias_l1_loss,
+                bias_cosine_loss=bias_cosine_loss,
+                loss_initial_semantic=bs_loss_dict.get("loss_initial_semantic"),
+                loss_initial_boundary=bs_loss_dict.get("loss_initial_boundary"),
+                loss_final_semantic=bs_loss_dict.get("loss_final_semantic"),
+                loss_final_boundary=bs_loss_dict.get("loss_final_boundary"),
+            )
+        else:
+            return_dict = dict()
+
+        if not self.training:
+            center_pred = coord + bias_pred
+            center_pred /= self.voxel_size
+            logit_pred = F.softmax(logit_pred, dim=-1)
+            segment_pred = torch.max(logit_pred, 1)[1]
+            mask = (
+                ~torch.concat(
+                    [
+                        (segment_pred == index).unsqueeze(-1)
+                        for index in self.segment_ignore_index
+                    ],
+                    dim=1,
+                )
+                .sum(-1)
+                .bool()
+            )
+
+            if mask.sum() == 0:
+                proposals_idx = torch.zeros(0).int()
+                proposals_offset = torch.zeros(1).int()
+            else:
+                center_pred_ = center_pred[mask]
+                segment_pred_ = segment_pred[mask]
+                batch_ = offset2batch(offset)[mask]
+                offset_ = nn.ConstantPad1d((1, 0), 0)(batch2offset(batch_))
+                idx, start_len = ballquery_batch_p(
+                    center_pred_,
+                    batch_.int(),
+                    offset_.int(),
+                    self.cluster_thresh,
+                    self.cluster_closed_points,
+                )
+                proposals_idx, proposals_offset = bfs_cluster(
+                    segment_pred_.int().cpu(),
+                    idx.cpu(),
+                    start_len.cpu(),
+                    self.cluster_min_points,
+                )
+                proposals_idx[:, 1] = (
+                    mask.nonzero().view(-1)[proposals_idx[:, 1].long()].int()
+                )
+
+            proposals_pred = torch.zeros(
+                (proposals_offset.shape[0] - 1, center_pred.shape[0]), dtype=torch.int
+            )
+            proposals_pred[proposals_idx[:, 0].long(), proposals_idx[:, 1].long()] = 1
+            instance_pred = segment_pred[
+                proposals_idx[:, 1][proposals_offset[:-1].long()].long()
+            ]
+            proposals_point_num = proposals_pred.sum(1)
+            proposals_mask = proposals_point_num > self.cluster_propose_points
+            proposals_pred = proposals_pred[proposals_mask]
+            instance_pred = instance_pred[proposals_mask]
+
+            pred_scores = []
+            pred_classes = []
+            pred_masks = proposals_pred.detach().cpu()
+            for proposal_id in range(len(proposals_pred)):
+                segment_ = proposals_pred[proposal_id]
+                confidence_ = logit_pred[
+                    segment_.bool(), instance_pred[proposal_id]
+                ].mean()
+                object_ = instance_pred[proposal_id]
+                pred_scores.append(confidence_)
+                pred_classes.append(object_)
+            if len(pred_scores) > 0:
+                pred_scores = torch.stack(pred_scores).cpu()
+                pred_classes = torch.stack(pred_classes).cpu()
+            else:
+                pred_scores = torch.tensor([])
+                pred_classes = torch.tensor([])
+
+            return_dict["seg_logits"] = final_sem_logits
+            return_dict["boundary_logits"] = final_bou_logits
+            return_dict["pred_scores"] = pred_scores
+            return_dict["pred_masks"] = pred_masks
+            return_dict["pred_classes"] = pred_classes
+
         return return_dict

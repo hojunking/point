@@ -1,11 +1,11 @@
 """
-OctFormer + BFANet-style Boundary-Semantic Head
+OctFormer + BFANet-style Boundary-Semantic Head (InstanceSeg variant)
 
-Built on top of OctFormer-v1m1 modules and adapted for BoundarySemanticLoss
-(i.e., boundary outputs are logits, not sigmoid probabilities).
+This keeps the same BFA head behavior as OctFormer-v1m2-BS and additionally
+returns point-wise feature `feat` for PointGroup bias head.
 """
 
-from typing import Optional, List
+from typing import List
 import torch
 import torch.nn as nn
 
@@ -43,7 +43,6 @@ class OctFormerBFAHead(nn.Module):
             boundary_feature_channels % num_heads == 0
         ), "boundary_feature_channels must be divisible by num_heads"
 
-        self.boundary_feature_channels = boundary_feature_channels
         self.num_heads = num_heads
         self.head_dim = boundary_feature_channels // num_heads
         self.scale = self.head_dim**-0.5
@@ -130,7 +129,6 @@ class OctFormerBFAHead(nn.Module):
         initial_bou_logits = self.initial_boundary_head(margin_out_init)
 
         k_tokens = 1
-
         qkv_s = self.sem_qkv_proj(sem_out_init).reshape(
             -1, k_tokens, 3, self.num_heads, self.head_dim
         )
@@ -147,19 +145,16 @@ class OctFormerBFAHead(nn.Module):
         q_all = self.fusion_q_proj(q_all)
         q_all = q_all.reshape(feat.shape[0], self.num_heads, k_tokens, self.head_dim)
 
-        attn_sem = q_all @ k_s.transpose(-2, -1) * self.scale
-        attn_sem = self.softmax(attn_sem)
+        attn_sem = self.softmax(q_all @ k_s.transpose(-2, -1) * self.scale)
         attn_sem = self.attn_drop(attn_sem)
         sem_out_fused = (attn_sem @ v_s).view(feat.shape[0], -1)
 
-        attn_bou = q_all @ k_m.transpose(-2, -1) * self.scale
-        attn_bou = self.softmax(attn_bou)
+        attn_bou = self.softmax(q_all @ k_m.transpose(-2, -1) * self.scale)
         attn_bou = self.attn_drop(attn_bou)
         margin_out_fused = (attn_bou @ v_m).view(feat.shape[0], -1)
 
         final_sem_logits = self.final_semantic_head(sem_out_fused)
         final_bou_logits = self.final_boundary_head(margin_out_fused)
-
         return (
             initial_sem_logits,
             initial_bou_logits,
@@ -168,8 +163,8 @@ class OctFormerBFAHead(nn.Module):
         )
 
 
-@MODELS.register_module("OctFormer-v1m2-BS")
-class OctFormerBS(nn.Module):
+@MODELS.register_module("OctFormer-v1m3-BS-InsSeg")
+class OctFormerBSInsSeg(nn.Module):
     def __init__(
         self,
         in_channels,
@@ -294,6 +289,7 @@ class OctFormerBS(nn.Module):
         ) = self.bfa_head(out)
 
         return dict(
+            feat=out,
             initial_semantic_logits=initial_semantic_logits,
             initial_boundary_logits=initial_boundary_logits,
             final_semantic_logits=final_semantic_logits,

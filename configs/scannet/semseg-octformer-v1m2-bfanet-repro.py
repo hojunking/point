@@ -15,7 +15,7 @@ model = dict(
     num_classes=20,
     backbone_out_channels=168,
     backbone=dict(
-        type="OctFormer-v1m2-BS",
+        type="OctFormer-v1m2-BFANet",
         in_channels=10,
         num_classes=20,
         fpn_channels=168,
@@ -30,20 +30,16 @@ model = dict(
         nempty=True,
         octree_depth=11,
         octree_full_depth=2,
-        bfa_head_cfg=dict(
-            boundary_feature_channels=128,
-            num_heads=8,
-            dropout=(0.0, 0.0),
-        ),
+        dropout=(0.0, 0.0),
     ),
     criteria=[
         dict(
-            type="BoundarySemanticLoss",
+            type="BFANetReproLoss",
             semantic_loss_weight=1.0,
             boundary_loss_weight=1.0,
             ignore_index=-1,
-            num_semantic_classes=20,
             semantic_boundary_weight_factor=9.0,
+            dice_smooth=1.0,
         )
     ],
 )

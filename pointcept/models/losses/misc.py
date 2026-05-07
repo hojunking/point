@@ -238,6 +238,123 @@ def _binary_dice_loss(pred, target, smooth=1e-5, exponent=2):
     dice = (2. * intersection + smooth) / (union + smooth)
     return (1 - dice)
 
+
+def _binary_dice_loss_prob(pred, target, smooth=1.0):
+    target = target.float()
+    intersection = (pred * target).sum()
+    union = pred.sum() + target.sum()
+    dice = (2.0 * intersection + smooth) / (union + smooth)
+    return 1.0 - dice
+
+
+def _multiclass_dice_loss(pred, target, ignore_index=-1, smooth=1.0):
+    valid_mask = target != ignore_index
+    if valid_mask.sum() == 0:
+        return pred.new_tensor(0.0)
+    pred = pred[valid_mask]
+    target = target[valid_mask]
+    prob = F.softmax(pred, dim=1)
+    target_one_hot = F.one_hot(target.long(), num_classes=pred.shape[1]).float()
+    intersection = (prob * target_one_hot).sum(dim=0)
+    union = prob.sum(dim=0) + target_one_hot.sum(dim=0)
+    dice = (2.0 * intersection + smooth) / (union + smooth)
+    return 1.0 - dice.mean()
+
+
+@LOSSES.register_module()
+class BFANetReproLoss(nn.Module):
+    def __init__(
+        self,
+        semantic_loss_weight=1.0,
+        boundary_loss_weight=1.0,
+        ignore_index=-1,
+        semantic_boundary_weight_factor=9.0,
+        dice_smooth=1.0,
+        eps=1e-6,
+    ):
+        super().__init__()
+        self.semantic_loss_weight = semantic_loss_weight
+        self.boundary_loss_weight = boundary_loss_weight
+        self.ignore_index = ignore_index
+        self.semantic_boundary_weight_factor = semantic_boundary_weight_factor
+        self.dice_smooth = dice_smooth
+        self.eps = eps
+        self.ce_loss = CrossEntropyLoss(ignore_index=ignore_index, reduction="none")
+
+    def _semantic_loss(self, pred, target, boundary):
+        valid_mask = target != self.ignore_index
+        if valid_mask.sum() == 0:
+            return pred.new_tensor(0.0)
+        sem_weight = torch.ones_like(target, dtype=torch.float32, device=target.device)
+        sem_weight += boundary.float() * self.semantic_boundary_weight_factor
+        ce = self.ce_loss(pred, target)
+        ce = (ce * sem_weight)[valid_mask].mean()
+        dice = _multiclass_dice_loss(
+            pred, target, ignore_index=self.ignore_index, smooth=self.dice_smooth
+        )
+        return ce + dice
+
+    def _boundary_loss(self, pred_prob, target, valid_semantic_mask):
+        if pred_prob.dim() == 1:
+            pred_prob = pred_prob.unsqueeze(-1)
+        if target.dim() == 1:
+            target = target.unsqueeze(-1)
+        valid_mask = valid_semantic_mask & (target.squeeze(-1) != self.ignore_index)
+        if valid_mask.sum() == 0:
+            return pred_prob.new_tensor(0.0)
+        pred_prob = pred_prob[valid_mask].clamp(self.eps, 1.0 - self.eps)
+        target = target[valid_mask].float()
+        bce = F.binary_cross_entropy(pred_prob, target)
+        dice = _binary_dice_loss_prob(pred_prob, target, smooth=self.dice_smooth)
+        return bce + dice
+
+    def forward(
+        self,
+        initial_sem_logits,
+        initial_bou_logits,
+        final_sem_logits,
+        final_bou_logits,
+        gt_semantic_label,
+        gt_boundary_label,
+    ):
+        if gt_boundary_label.dim() == 1:
+            gt_boundary = gt_boundary_label
+        else:
+            gt_boundary = gt_boundary_label.squeeze(-1)
+        valid_semantic_mask = gt_semantic_label != self.ignore_index
+
+        loss_initial_semantic = self._semantic_loss(
+            initial_sem_logits, gt_semantic_label, gt_boundary
+        )
+        loss_initial_boundary = self._boundary_loss(
+            initial_bou_logits, gt_boundary_label, valid_semantic_mask
+        )
+        loss_final_semantic = self._semantic_loss(
+            final_sem_logits, gt_semantic_label, gt_boundary
+        )
+        loss_final_boundary = self._boundary_loss(
+            final_bou_logits, gt_boundary_label, valid_semantic_mask
+        )
+
+        loss_initial_semantic = loss_initial_semantic * self.semantic_loss_weight
+        loss_final_semantic = loss_final_semantic * self.semantic_loss_weight
+        loss_initial_boundary = loss_initial_boundary * self.boundary_loss_weight
+        loss_final_boundary = loss_final_boundary * self.boundary_loss_weight
+        total_loss = (
+            loss_initial_semantic
+            + loss_initial_boundary
+            + loss_final_semantic
+            + loss_final_boundary
+        )
+
+        return {
+            "loss_initial_semantic": loss_initial_semantic,
+            "loss_initial_boundary": loss_initial_boundary,
+            "loss_final_semantic": loss_final_semantic,
+            "loss_final_boundary": loss_final_boundary,
+            "loss": total_loss,
+        }
+
 @LOSSES.register_module()
 class BoundarySemanticLoss(nn.Module):
     def __init__(self, semantic_loss_weight=1.0, boundary_loss_weight=1.0,

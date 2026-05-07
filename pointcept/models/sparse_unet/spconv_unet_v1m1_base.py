@@ -18,6 +18,7 @@ from timm.layers import trunc_normal_
 
 from pointcept.models.builder import MODELS
 from pointcept.models.utils import offset2batch
+from pointcept.models.point_transformer_v3.point_transformer_v3m3_bsblock import BSBlock
 
 
 class BasicBlock(spconv.SparseModule):
@@ -278,6 +279,67 @@ class SpUNetBase(nn.Module):
                 scatter(x.features, x.indices[:, 0].long(), reduce="mean", dim=0)
             )
         return x.features
+
+
+@MODELS.register_module("SpUNet-v1m1-BS")
+class SpUNetBSBase(SpUNetBase):
+    def __init__(
+        self,
+        in_channels,
+        num_classes,
+        base_channels=32,
+        channels=(32, 64, 128, 256, 256, 128, 96, 96),
+        layers=(2, 3, 4, 6, 2, 2, 2, 2),
+        cls_mode=False,
+        bsblock_cfg=None,
+    ):
+        if cls_mode:
+            raise ValueError("SpUNet-v1m1-BS only supports semantic segmentation mode.")
+        super().__init__(
+            in_channels=in_channels,
+            num_classes=0,
+            base_channels=base_channels,
+            channels=channels,
+            layers=layers,
+            cls_mode=cls_mode,
+        )
+        bsblock_cfg = dict(bsblock_cfg or {})
+        bsblock_cfg.setdefault("in_channels", channels[-1])
+        bsblock_cfg.setdefault("semantic_out_channels", channels[-1])
+        bsblock_cfg.setdefault("num_semantic_classes", num_classes)
+        self.bfanet_block = BSBlock(**bsblock_cfg)
+
+    def forward(self, input_dict):
+        grid_coord = input_dict["grid_coord"]
+        feat = input_dict["feat"]
+        offset = input_dict["offset"]
+
+        batch = offset2batch(offset)
+        sparse_shape = torch.add(torch.max(grid_coord, dim=0).values, 96).tolist()
+        x = spconv.SparseConvTensor(
+            features=feat,
+            indices=torch.cat(
+                [batch.unsqueeze(-1).int(), grid_coord.int()], dim=1
+            ).contiguous(),
+            spatial_shape=sparse_shape,
+            batch_size=batch[-1].tolist() + 1,
+        )
+        x = self.conv_input(x)
+        skips = [x]
+        for s in range(self.num_stages):
+            x = self.down[s](x)
+            x = self.enc[s](x)
+            skips.append(x)
+
+        x = skips.pop(-1)
+        for s in reversed(range(self.num_stages)):
+            x = self.up[s](x)
+            skip = skips.pop(-1)
+            x = x.replace_feature(torch.cat((x.features, skip.features), dim=1))
+            x = self.dec[s](x)
+
+        input_dict.feat = x.features
+        return self.bfanet_block(input_dict)
 
 
 @MODELS.register_module()
