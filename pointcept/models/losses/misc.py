@@ -510,6 +510,12 @@ class BSLossWithLovasz(nn.Module):
                 final_sem_logits, final_bou_logits,
                 gt_semantic_label, gt_boundary_label):
         
+        if (gt_semantic_label[gt_semantic_label != self.ignore_index].max() >= initial_sem_logits.shape[1]):
+            print("❌ invalid label detected:",
+                gt_semantic_label.min().item(), gt_semantic_label.max().item(),
+                "num_classes:", initial_sem_logits.shape[1])
+            raise ValueError("Invalid class index in gt_semantic_label!")
+
         # --- 전처리 (기존과 동일) ---
         if gt_boundary_label.dim() == 1:
             gt_boundary_label_unsqueeze = gt_boundary_label.unsqueeze(-1)
